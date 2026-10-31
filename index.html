@@ -127,6 +127,7 @@
     color: var(--dim);
   }
   #viewname { color: var(--txt); font-weight: 600; font-size: 11px; }
+  #vzoom { color: var(--accent); font-size: 10px; font-variant-numeric: tabular-nums; }
   #viewdots { display: flex; gap: 3px; }
   #viewdots i { width: 5px; height: 5px; border-radius: 50%; background: #2b3a4b; display: block; }
   #viewdots i.on { background: var(--accent); }
@@ -221,6 +222,7 @@
     </div>
     <div class="tiltfoot">
       <span id="viewname">Silhouette</span>
+      <span id="vzoom">×1.00</span>
       <span id="viewdots"></span>
       <span class="taphint">toucher pour changer</span>
     </div>
@@ -262,7 +264,8 @@
     tilt: document.getElementById('tilt'),
     vroll: document.getElementById('vroll'), vpitch: document.getElementById('vpitch'),
     voffset: document.getElementById('voffset'), vstate: document.getElementById('vstate'),
-    viewname: document.getElementById('viewname'), viewdots: document.getElementById('viewdots')
+    viewname: document.getElementById('viewname'), viewdots: document.getElementById('viewdots'),
+    vzoom: document.getElementById('vzoom')
   };
   var ctx = el.chart.getContext('2d');
   var tctx = el.tilt.getContext('2d');
@@ -310,6 +313,7 @@
       dy: prev ? y - prev.y : 0,
       dz: prev ? z - prev.z : 0
     };
+    zoomTarget = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoomTarget + s.dz * ZOOM_GAIN));
     prev = s;
     samples.push(s);
     if (samples.length > MAX_SAMPLES) samples.shift();
@@ -384,6 +388,13 @@
   var viewIndex = 0;
   var lastG = null;
 
+  var ZOOM_GAIN = 0.12;   // sensibilité aux variations de Z
+  var ZOOM_MIN = 0.55;
+  var ZOOM_MAX = 1.9;
+  var zoom = 1;           // facteur réellement appliqué
+  var zoomTarget = 1;     // consigne issue du signe des Δz
+  var zoomLabel = '';
+
   function tiltOf(s) {
     if (!s) return null;
     var mag = Math.max(s.mag, 0.001);
@@ -417,7 +428,12 @@
     lastG = g;
     var w = el.tilt.width, h = el.tilt.height;
     tctx.clearRect(0, 0, w, h);
+    tctx.save();
+    tctx.translate(w / 2, h / 2);
+    tctx.scale(zoom, zoom);
+    tctx.translate(-w / 2, -h / 2);
     VIEWS[viewIndex].draw(g, w, h);
+    tctx.restore();
   }
 
   /* 1. Silhouette : appareil incliné + masse apparente */
@@ -797,6 +813,17 @@
       lastRowTotal = total;
     }
 
+    // zoom : on rattrape la consigne, qui revient lentement à 1
+    var before = zoom;
+    zoom += (zoomTarget - zoom) * 0.22;
+    zoomTarget += (1 - zoomTarget) * 0.02;
+    var label = '×' + zoom.toFixed(2);
+    if (label !== zoomLabel) {
+      zoomLabel = label;
+      el.vzoom.textContent = label;
+    }
+    if (Math.abs(zoom - before) > 0.0003) drawTilt(lastG);
+
     requestAnimationFrame(render);
   }
 
@@ -880,6 +907,8 @@
     el.vmag.textContent = el.vdelta.textContent = '—';
     el.vcount.textContent = '0';
     dirty = false;
+    zoom = 1; zoomTarget = 1; zoomLabel = '';
+    el.vzoom.textContent = '×1.00';
     updateTiltStats(null);
     drawTilt(null);
     drawChart();
