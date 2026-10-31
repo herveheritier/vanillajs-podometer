@@ -251,10 +251,10 @@
   <div class="tiltcard">
     <canvas id="tilt" width="396" height="495"></canvas>
     <div class="tiltstats">
-      <div><div class="k">Roulis</div><div class="v" id="vroll">—</div></div>
-      <div><div class="k">Tangage</div><div class="v" id="vpitch">—</div></div>
-      <div><div class="k">Déport</div><div class="v" id="voffset">—</div></div>
-      <div><div class="k">État</div><div class="v" id="vstate">—</div></div>
+      <div><div class="k" id="k1">Roulis</div><div class="v" id="vroll">—</div></div>
+      <div><div class="k" id="k2">Tangage</div><div class="v" id="vpitch">—</div></div>
+      <div><div class="k" id="k3">Déport</div><div class="v" id="voffset">—</div></div>
+      <div><div class="k" id="k4">État</div><div class="v" id="vstate">—</div></div>
     </div>
     <div class="tiltfoot">
       <span id="viewname">Silhouette</span>
@@ -301,7 +301,9 @@
     vroll: document.getElementById('vroll'), vpitch: document.getElementById('vpitch'),
     voffset: document.getElementById('voffset'), vstate: document.getElementById('vstate'),
     viewname: document.getElementById('viewname'), viewdots: document.getElementById('viewdots'),
-    vzoom: document.getElementById('vzoom')
+    vzoom: document.getElementById('vzoom'),
+    k1: document.getElementById('k1'), k2: document.getElementById('k2'),
+    k3: document.getElementById('k3'), k4: document.getElementById('k4')
   };
   var ctx = el.chart.getContext('2d');
   var tctx = el.tilt.getContext('2d');
@@ -349,6 +351,9 @@
       dy: prev ? y - prev.y : 0,
       dz: prev ? z - prev.z : 0
     };
+    var lin = linearAccel(e, x, y, z);
+    updatePosition(s, lin.x, lin.y);
+
     if (axisOn.z) {
       zoomTarget = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoomTarget + s.dz * ZOOM_GAIN * axisSign.z));
     }
@@ -422,13 +427,19 @@
     { nom: 'Vecteur 3D', draw: drawVecteur },
     { nom: 'Cadran', draw: drawCadran },
     { nom: 'Cube', draw: drawCube },
-    { nom: 'Avion', draw: drawAvion }
+    { nom: 'Avion', draw: drawAvion },
+    { nom: 'Position', draw: drawPosition, pos: true }
   ];
   var viewIndex = 0;
   var lastG = null;
 
   var axisOn = { x: true, y: true, z: true };     // effet de chaque axe sur la représentation
   var axisSign = { x: 1, y: 1, z: 1 };            // sens de chaque axe (+1 ou -1)
+
+  // position estimée par double intégration de l'accélération linéaire
+  var pos = { x: 0, y: 0, vx: 0, vy: 0, path: 0 };
+  var trail = [];
+  var gEst = null;                                // gravité estimée si "acceleration" est absent
 
   var ZOOM_GAIN = 0.12;   // sensibilité aux variations de Z
   var ZOOM_MIN = 0.55;
@@ -861,6 +872,107 @@
     tctx.stroke();
   }
 
+  /* 7. Position : déplacement horizontal estimé, indépendant de l'orientation */
+  function drawPosition(g, w, h) {
+    var cx = w / 2, cy = h / 2;
+    var R = Math.min(w, h) * 0.37;
+
+    var maxAbs = 0.02;   // 2 cm minimum pour ne pas amplifier le bruit
+    for (var i = 0; i < trail.length; i++) {
+      maxAbs = Math.max(maxAbs, Math.abs(trail[i].x), Math.abs(trail[i].y));
+    }
+    maxAbs = Math.max(maxAbs, Math.abs(pos.x), Math.abs(pos.y));
+    var k = R / maxAbs;
+
+    tctx.strokeStyle = 'rgba(125,139,154,.3)';
+    tctx.lineWidth = 1;
+    tctx.beginPath();
+    tctx.moveTo(cx - R, cy); tctx.lineTo(cx + R, cy);
+    tctx.moveTo(cx, cy - R); tctx.lineTo(cx, cy + R);
+    tctx.stroke();
+
+    if (trail.length > 1) {
+      tctx.strokeStyle = 'rgba(255,176,32,.5)';
+      tctx.lineWidth = 2;
+      tctx.beginPath();
+      for (var j = 0; j < trail.length; j++) {
+        var tx = cx + trail[j].x * k;
+        var ty = cy - trail[j].y * k;
+        if (j === 0) tctx.moveTo(tx, ty); else tctx.lineTo(tx, ty);
+      }
+      tctx.stroke();
+    }
+
+    // origine
+    tctx.beginPath();
+    tctx.arc(cx, cy, 4, 0, Math.PI * 2);
+    tctx.fillStyle = '#e6edf3';
+    tctx.fill();
+
+    // position courante
+    var qx = cx + pos.x * k, qy = cy - pos.y * k;
+    tctx.strokeStyle = 'rgba(255,176,32,.45)';
+    tctx.lineWidth = 1;
+    tctx.beginPath();
+    tctx.moveTo(cx, cy);
+    tctx.lineTo(qx, qy);
+    tctx.stroke();
+    tctx.beginPath();
+    tctx.arc(qx, qy, 8, 0, Math.PI * 2);
+    tctx.fillStyle = '#ffb020';
+    tctx.fill();
+    tctx.strokeStyle = '#0b0f14';
+    tctx.lineWidth = 2;
+    tctx.stroke();
+
+    // cadre
+    tctx.strokeStyle = '#2c3a4b';
+    tctx.lineWidth = 2;
+    tctx.beginPath();
+    tctx.arc(cx, cy, R, 0, Math.PI * 2);
+    tctx.stroke();
+  }
+
+  function clamp(v, lo, hi) {
+    return Math.max(lo, Math.min(hi, v));
+  }
+
+  function linearAccel(e, x, y, z) {
+    var a = e.acceleration;
+    if (a && typeof a.x === 'number') {
+      return { x: a.x, y: typeof a.y === 'number' ? a.y : 0 };
+    }
+    if (!gEst) {
+      gEst = { x: x, y: y, z: z };
+    } else {
+      gEst.x += (x - gEst.x) * 0.06;
+      gEst.y += (y - gEst.y) * 0.06;
+      gEst.z += (z - gEst.z) * 0.06;
+    }
+    return { x: x - gEst.x, y: y - gEst.y };
+  }
+
+  function updatePosition(s, lx, ly) {
+    if (!prev) return;
+    var dt = (s.t - prev.t) / 1000;
+    if (!(dt > 0) || dt > 0.35) return;
+
+    var ax = axisOn.x ? lx * axisSign.x : 0;
+    var ay = axisOn.y ? ly * axisSign.y : 0;
+    var amp = Math.sqrt(ax * ax + ay * ay);
+    var tau = amp < 0.15 ? 0.12 : 0.9;   // appareil posé : freinage fort
+    var damp = Math.exp(-dt / tau);
+
+    pos.vx = (pos.vx + ax * dt) * damp;
+    pos.vy = (pos.vy + ay * dt) * damp;
+    pos.x = clamp(pos.x + pos.vx * dt, -3, 3);
+    pos.y = clamp(pos.y + pos.vy * dt, -3, 3);
+    pos.path += Math.sqrt(pos.vx * pos.vx + pos.vy * pos.vy) * dt;
+
+    trail.push({ x: pos.x, y: pos.y });
+    if (trail.length > 400) trail.shift();
+  }
+
   function fmtDeg(rad) {
     if (!isFinite(rad)) return '—';
     var d = rad * 180 / Math.PI;
@@ -868,6 +980,25 @@
   }
 
   function updateTiltStats(g) {
+    if (VIEWS[viewIndex].pos) {
+      var d = Math.sqrt(pos.x * pos.x + pos.y * pos.y);
+      var v = Math.sqrt(pos.vx * pos.vx + pos.vy * pos.vy);
+      el.k1.textContent = 'Déplacement';
+      el.k2.textContent = 'Vitesse';
+      el.k3.textContent = 'Trajet';
+      el.k4.textContent = 'État';
+      el.vroll.textContent = (d * 100).toFixed(0) + ' cm';
+      el.vpitch.textContent = (v * 100).toFixed(0) + ' cm/s';
+      el.voffset.textContent = (pos.path * 100).toFixed(0) + ' cm';
+      el.vstate.textContent = v < 0.03 ? 'immobile' : 'en mouvement';
+      return;
+    }
+
+    el.k1.textContent = 'Roulis';
+    el.k2.textContent = 'Tangage';
+    el.k3.textContent = 'Déport';
+    el.k4.textContent = 'État';
+
     if (!g) {
       el.vroll.textContent = el.vpitch.textContent = el.voffset.textContent = el.vstate.textContent = '—';
       return;
@@ -1068,6 +1199,9 @@
     dirty = false;
     zoom = 1; zoomTarget = 1; zoomLabel = '';
     el.vzoom.textContent = '×1.00';
+    pos = { x: 0, y: 0, vx: 0, vy: 0, path: 0 };
+    trail = [];
+    gEst = null;
     updateTiltStats(null);
     drawTilt(null);
     drawChart();
@@ -1091,7 +1225,7 @@
     if (e && e.preventDefault) e.preventDefault();
     viewIndex = (viewIndex + 1) % VIEWS.length;
     updateViewLabel();
-    drawTilt(lastG);
+    refreshView();
   });
   requestAnimationFrame(render);
 })();
