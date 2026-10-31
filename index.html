@@ -99,8 +99,34 @@
     transition: opacity .15s ease, background .15s ease;
   }
   .axis:active { background: #19222e; }
-  .axis.off { opacity: .45; }
+  .axis.off .k, .axis.off .v, .axis.off .d { opacity: .4; }
   .axis.off .k { text-decoration: line-through; }
+  .axis .inv {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    flex: none;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    background: #0f151d;
+    color: var(--dim);
+    cursor: pointer;
+  }
+  .axis .inv[aria-pressed="true"] {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #1a1200;
+  }
 
   .summary {
     display: grid;
@@ -211,9 +237,9 @@
 
 <main>
   <div class="axes">
-    <div class="axis" id="axX" role="button" tabindex="0" aria-pressed="true" aria-label="Effet de l'axe X sur la représentation"><div class="k">X</div><div class="v" id="vx">—</div><div class="d" id="dx">Δ —</div></div>
-    <div class="axis" id="axY" role="button" tabindex="0" aria-pressed="true" aria-label="Effet de l'axe Y sur la représentation"><div class="k">Y</div><div class="v" id="vy">—</div><div class="d" id="dy">Δ —</div></div>
-    <div class="axis" id="axZ" role="button" tabindex="0" aria-pressed="true" aria-label="Effet de l'axe Z sur la représentation"><div class="k">Z</div><div class="v" id="vz">—</div><div class="d" id="dz">Δ —</div></div>
+    <div class="axis" id="axX" role="button" tabindex="0" aria-pressed="true" aria-label="Effet de l'axe X sur la représentation"><button type="button" class="inv" id="invX" aria-pressed="false" aria-label="Inverser le signe de l'axe X">+</button><div class="k">X</div><div class="v" id="vx">—</div><div class="d" id="dx">Δ —</div></div>
+    <div class="axis" id="axY" role="button" tabindex="0" aria-pressed="true" aria-label="Effet de l'axe Y sur la représentation"><button type="button" class="inv" id="invY" aria-pressed="false" aria-label="Inverser le signe de l'axe Y">+</button><div class="k">Y</div><div class="v" id="vy">—</div><div class="d" id="dy">Δ —</div></div>
+    <div class="axis" id="axZ" role="button" tabindex="0" aria-pressed="true" aria-label="Effet de l'axe Z sur la représentation"><button type="button" class="inv" id="invZ" aria-pressed="false" aria-label="Inverser le signe de l'axe Z">+</button><div class="k">Z</div><div class="v" id="vz">—</div><div class="d" id="dz">Δ —</div></div>
   </div>
 
   <div class="summary">
@@ -324,7 +350,7 @@
       dz: prev ? z - prev.z : 0
     };
     if (axisOn.z) {
-      zoomTarget = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoomTarget + s.dz * ZOOM_GAIN));
+      zoomTarget = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoomTarget + s.dz * ZOOM_GAIN * axisSign.z));
     }
     prev = s;
     samples.push(s);
@@ -401,7 +427,8 @@
   var viewIndex = 0;
   var lastG = null;
 
-  var axisOn = { x: true, y: true, z: true };   // effet de chaque axe sur la représentation
+  var axisOn = { x: true, y: true, z: true };     // effet de chaque axe sur la représentation
+  var axisSign = { x: 1, y: 1, z: 1 };            // sens de chaque axe (+1 ou -1)
 
   var ZOOM_GAIN = 0.12;   // sensibilité aux variations de Z
   var ZOOM_MIN = 0.55;
@@ -416,15 +443,16 @@
     // X pilote le roulis et le déport horizontal, Y le tangage et le déport
     // vertical, Z le zoom et l'écart à la normale. Couper un axe n'altère pas
     // les grandeurs des autres.
-    var x = axisOn.x ? s.x : 0;
-    var y = axisOn.y ? s.y : 0;
+    var x = axisOn.x ? s.x * axisSign.x : 0;
+    var y = axisOn.y ? s.y * axisSign.y : 0;
+    var z = axisOn.z ? s.z * axisSign.z : 0;
     return {
       mag: mag,
       fx: x / mag,
       fy: y / mag,
-      zf: axisOn.z ? s.z / mag : 0,
-      roll: axisOn.x ? Math.atan2(s.x, Math.sqrt(s.y * s.y + s.z * s.z)) : 0,
-      pitch: axisOn.y ? Math.atan2(s.y, Math.sqrt(s.x * s.x + s.z * s.z)) : 0,
+      zf: z / mag,
+      roll: axisOn.x ? Math.atan2(x, Math.sqrt(s.y * s.y + s.z * s.z)) : 0,
+      pitch: axisOn.y ? Math.atan2(y, Math.sqrt(s.x * s.x + s.z * s.z)) : 0,
       frac: Math.sqrt(x * x + y * y) / mag
     };
   }
@@ -868,7 +896,7 @@
     drawTilt(g);
   }
 
-  function bindAxis(id, key) {
+  function bindAxis(id, key, invId) {
     var node = document.getElementById(id);
     if (!node) return;
     node.addEventListener('pointerdown', function (e) {
@@ -876,6 +904,18 @@
       axisOn[key] = !axisOn[key];
       if (node.classList && node.classList.toggle) node.classList.toggle('off', !axisOn[key]);
       if (node.setAttribute) node.setAttribute('aria-pressed', axisOn[key] ? 'true' : 'false');
+      refreshView();
+    });
+
+    var chip = document.getElementById(invId);
+    if (!chip) return;
+    chip.addEventListener('pointerdown', function (e) {
+      if (e && e.stopPropagation) e.stopPropagation();  // ne pas couper/activer la carte
+      if (e && e.preventDefault) e.preventDefault();
+      axisSign[key] = -axisSign[key];
+      var inverse = axisSign[key] < 0;
+      chip.textContent = inverse ? '-' : '+';
+      if (chip.setAttribute) chip.setAttribute('aria-pressed', inverse ? 'true' : 'false');
       refreshView();
     });
   }
@@ -1041,9 +1081,9 @@
   if (!motionAvailable()) {
     setStatus('indisponible', 'err');
   }
-  bindAxis('axX', 'x');
-  bindAxis('axY', 'y');
-  bindAxis('axZ', 'z');
+  bindAxis('axX', 'x', 'invX');
+  bindAxis('axY', 'y', 'invY');
+  bindAxis('axZ', 'z', 'invZ');
   updateViewLabel();
   updateTiltStats(null);
   drawTilt(null);
