@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0f14">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Accéléromètre — variations</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --panel: #131a23;
+    --line: #1f2a37;
+    --txt: #e6edf3;
+    --dim: #7d8b9a;
+    --x: #ff5c7a;
+    --y: #4ade80;
+    --z: #4da3ff;
+    --accent: #ffb020;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--txt);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    overscroll-behavior: none;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  h1 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0;
+    letter-spacing: .2px;
+  }
+  h1 small { display: block; font-size: 10px; color: var(--dim); font-weight: 400; letter-spacing: .4px; text-transform: uppercase; }
+  .badge {
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    padding: 4px 9px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: #0f151d;
+    color: var(--dim);
+    white-space: nowrap;
+  }
+  .badge.on { color: #04130a; background: var(--y); border-color: var(--y); }
+  .badge.err { color: #2b0a0e; background: var(--x); border-color: var(--x); }
+
+  main { flex: 1; display: flex; flex-direction: column; gap: 10px; padding: 10px 14px; min-height: 0; }
+
+  .axes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .axis {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 8px 10px;
+    position: relative;
+    overflow: hidden;
+  }
+  .axis::before {
+    content: "";
+    position: absolute; inset: 0 auto 0 0; width: 3px;
+    background: currentColor;
+    opacity: .9;
+  }
+  .axis .k { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .6px; }
+  .axis .v {
+    font-size: 19px;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+    color: currentColor;
+    margin-top: 2px;
+    line-height: 1.25;
+  }
+  .axis .d { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  #axX { color: var(--x); } #axY { color: var(--y); } #axZ { color: var(--z); }
+  .axis .d, .axis .k { color: var(--dim); }
+
+  .summary {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 10px;
+  }
+  .cell .k { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .5px; }
+  .cell .v { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  canvas { width: 100%; height: 120px; display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+
+  .logwrap {
+    flex: 1;
+    min-height: 90px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .loghead {
+    display: grid;
+    grid-template-columns: 1.15fr 1fr 1fr 1fr 1fr;
+    gap: 4px;
+    padding: 7px 10px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    color: var(--dim);
+    border-bottom: 1px solid var(--line);
+  }
+  .log { flex: 1; overflow-y: auto; font-variant-numeric: tabular-nums; }
+  .row {
+    display: grid;
+    grid-template-columns: 1.15fr 1fr 1fr 1fr 1fr;
+    gap: 4px;
+    padding: 5px 10px;
+    font-size: 12px;
+    border-bottom: 1px solid rgba(31, 42, 55, .55);
+  }
+  .row:nth-child(2) { background: #17202b; }
+  .row span { text-align: right; }
+  .row span:first-child { text-align: left; color: var(--dim); }
+  .row .mx { color: var(--x); } .row .my { color: var(--y); } .row .mz { color: var(--z); }
+  .row .mm { color: var(--accent); }
+
+  footer { display: flex; gap: 8px; padding: 0 14px calc(10px + env(safe-area-inset-bottom)); }
+  button {
+    flex: 1;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 13px 10px;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--txt);
+    cursor: pointer;
+  }
+  button:active { transform: scale(.99); }
+  #start { background: var(--accent); border-color: var(--accent); color: #1a1200; }
+  #start.stop { background: var(--x); border-color: var(--x); color: #26060b; }
+  #start:disabled { opacity: .55; }
+
+  .empty { padding: 14px; font-size: 12px; color: var(--dim); line-height: 1.5; }
+  code { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Accéléromètre<small>variations en direct</small></h1>
+  <span class="badge" id="status">inactif</span>
+</header>
+
+<main>
+  <div class="axes">
+    <div class="axis" id="axX"><div class="k">X</div><div class="v" id="vx">—</div><div class="d" id="dx">Δ —</div></div>
+    <div class="axis" id="axY"><div class="k">Y</div><div class="v" id="vy">—</div><div class="d" id="dy">Δ —</div></div>
+    <div class="axis" id="axZ"><div class="k">Z</div><div class="v" id="vz">—</div><div class="d" id="dz">Δ —</div></div>
+  </div>
+
+  <div class="summary">
+    <div class="cell"><div class="k">Norme</div><div class="v" id="vmag">—</div></div>
+    <div class="cell"><div class="k">Δ variation</div><div class="v" id="vdelta">—</div></div>
+    <div class="cell"><div class="k">Échantillons</div><div class="v" id="vcount">0</div></div>
+  </div>
+
+  <canvas id="chart" width="600" height="240"></canvas>
+
+  <div class="logwrap">
+    <div class="loghead"><span>temps</span><span>X</span><span>Y</span><span>Z</span><span>|a|</span></div>
+    <div class="log" id="log">
+      <div class="empty" id="hint">
+        Appuie sur <b>Démarrer</b> puis accepte la demande de capteur de mouvement.
+        Les données arrivent uniquement après interaction (obligatoire sur Android et iOS).
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <button id="start">Démarrer</button>
+  <button id="reset">Réinitialiser</button>
+</footer>
+
+<script>
+(function () {
+  'use strict';
+
+  var MAX_SAMPLES = 240;      // points conservés pour le graphe
+  var MAX_ROWS = 150;         // lignes conservées dans le journal
+
+  var el = {
+    status: document.getElementById('status'),
+    vx: document.getElementById('vx'), vy: document.getElementById('vy'), vz: document.getElementById('vz'),
+    dx: document.getElementById('dx'), dy: document.getElementById('dy'), dz: document.getElementById('dz'),
+    vmag: document.getElementById('vmag'), vdelta: document.getElementById('vdelta'), vcount: document.getElementById('vcount'),
+    start: document.getElementById('start'), reset: document.getElementById('reset'),
+    log: document.getElementById('log'), hint: document.getElementById('hint'),
+    chart: document.getElementById('chart')
+  };
+  var ctx = el.chart.getContext('2d');
+
+  var running = false;
+  var samples = [];          // {t, x, y, z, mag}
+  var prev = null;           // échantillon précédent
+  var total = 0;
+  var t0 = 0;               // horodatage du premier échantillon (log relatif)
+  var dirty = false;
+  var lastEventTs = 0;
+  var rate = { count: 0, since: 0 };
+  var listenTs = 0;
+
+  function fmt(n) {
+    if (n === null || n === undefined || isNaN(n)) return '—';
+    var s = n.toFixed(2);
+    return (n >= 0 ? '+' : '') + s;
+  }
+
+  function setStatus(text, cls) {
+    el.status.textContent = text;
+    el.status.className = 'badge' + (cls ? ' ' + cls : '');
+  }
+
+  function motionAvailable() {
+    return 'DeviceMotionEvent' in window;
+  }
+
+  /* ---------- capture ---------- */
+
+  function onMotion(e) {
+    var a = e.accelerationIncludingGravity || e.acceleration;
+    if (!a || (a.x === null && a.y === null && a.z === null)) return;
+
+    var x = a.x || 0, y = a.y || 0, z = a.z || 0;
+    var mag = Math.sqrt(x * x + y * y + z * z);
+    var raw = e.timeStamp || (window.performance && performance.now ? performance.now() : Date.now());
+    if (!t0) t0 = raw;
+    var s = {
+      t: raw - t0,
+      x: x, y: y, z: z, mag: mag,
+      d: prev ? mag - prev.mag : 0,
+      dx: prev ? x - prev.x : 0,
+      dy: prev ? y - prev.y : 0,
+      dz: prev ? z - prev.z : 0
+    };
+    prev = s;
+    samples.push(s);
+    if (samples.length > MAX_SAMPLES) samples.shift();
+    total++;
+    s.n = total;
+    dirty = true;
+
+    lastEventTs = Date.now();
+    rate.count++;
+    var now = lastEventTs;
+    if (!rate.since) rate.since = now;
+  }
+
+  /* ---------- rendu ---------- */
+
+  function drawChart() {
+    var w = el.chart.width, h = el.chart.height;
+    var pad = 8;
+    ctx.clearRect(0, 0, w, h);
+
+    // grille zéro
+    ctx.strokeStyle = 'rgba(125,139,154,.25)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, h / 2);
+    ctx.lineTo(w, h / 2);
+    ctx.stroke();
+
+    if (samples.length < 2) return;
+
+    var maxAbs = 1;
+    for (var i = 0; i < samples.length; i++) {
+      var s = samples[i];
+      maxAbs = Math.max(maxAbs, Math.abs(s.x), Math.abs(s.y), Math.abs(s.z));
+    }
+    maxAbs = Math.ceil(maxAbs * 1.1);
+
+    var n = samples.length;
+    var stepX = (w - pad * 2) / (n - 1);
+    var scale = (h - pad * 2) / 2 / maxAbs;
+    var mid = h / 2;
+
+    var series = [
+      { key: 'x', color: '#ff5c7a' },
+      { key: 'y', color: '#4ade80' },
+      { key: 'z', color: '#4da3ff' }
+    ];
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    for (var k = 0; k < series.length; k++) {
+      var key = series[k].key;
+      ctx.strokeStyle = series[k].color;
+      ctx.beginPath();
+      for (var j = 0; j < n; j++) {
+        var px = pad + j * stepX;
+        var py = mid - samples[j][key] * scale;
+        if (j === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+  }
+
+  var lastRowTotal = 0;
+
+  function render() {
+    if (dirty && samples.length) {
+      dirty = false;
+      var last = samples[samples.length - 1];
+
+      el.vx.textContent = fmt(last.x);
+      el.vy.textContent = fmt(last.y);
+      el.vz.textContent = fmt(last.z);
+      el.dx.textContent = 'Δ ' + fmt(last.dx);
+      el.dy.textContent = 'Δ ' + fmt(last.dy);
+      el.dz.textContent = 'Δ ' + fmt(last.dz);
+      el.vmag.textContent = fmt(last.mag).replace('+', '') + ' m/s²';
+      el.vdelta.textContent = fmt(last.d);
+      el.vcount.textContent = total.toLocaleString('fr-FR');
+
+      drawChart();
+    }
+
+    // journal : n'ajoute que les échantillons pas encore affichés
+    if (total !== lastRowTotal) {
+      var fresh = [];
+      for (var i = samples.length - 1; i >= 0; i--) {
+        if (samples[i].n <= lastRowTotal) break;
+        fresh.push(samples[i]);
+      }
+      fresh.reverse(); // du plus ancien au plus récent
+      for (var f = 0; f < fresh.length; f++) {
+        var s = fresh[f];
+        var row = document.createElement('div');
+        row.className = 'row';
+        row.innerHTML =
+          '<span>' + (s.t / 1000).toFixed(2) + 's</span>' +
+          '<span class="mx">' + fmt(s.x) + '</span>' +
+          '<span class="my">' + fmt(s.y) + '</span>' +
+          '<span class="mz">' + fmt(s.z) + '</span>' +
+          '<span class="mm">' + s.mag.toFixed(2) + '</span>';
+        el.log.insertBefore(row, el.log.firstChild);
+      }
+      if (fresh.length) {
+        if (el.hint.parentNode) el.hint.parentNode.removeChild(el.hint);
+        var rows = el.log.querySelectorAll('.row');
+        for (var r = MAX_ROWS; r < rows.length; r++) rows[r].remove();
+        el.log.scrollTop = 0;
+      }
+      lastRowTotal = total;
+    }
+
+    requestAnimationFrame(render);
+  }
+
+  function tickRate() {
+    if (!running) return;
+    var now = Date.now();
+    var span = now - rate.since;
+    var hz = span > 300 ? (rate.count * 1000 / span) : 0;
+    if (hz > 0) setStatus(Math.round(hz) + ' Hz', 'on');
+    rate.count = 0;
+    rate.since = now;
+
+    if (now - lastEventTs > 2000 && lastEventTs > 0) {
+      setStatus('aucune donnée', '');
+    } else if (now - listenTs > 2500 && lastEventTs === 0) {
+      setStatus('capteur muet', 'err');
+      el.hint.innerHTML =
+        'Aucun événement reçu. Le capteur de mouvement du navigateur exige une page <b>HTTPS</b> ou <code>localhost</code>. ' +
+        'Si tu ouvres le fichier en <code>file://</code>, sers-le avec <code>npx serve</code> ou <code>python3 -m http.server</code>.';
+    }
+  }
+
+  /* ---------- contrôle ---------- */
+
+  function requestPermission() {
+    var DME = window.DeviceMotionEvent;
+    if (DME && typeof DME.requestPermission === 'function') {
+      return DME.requestPermission();
+    }
+    return Promise.resolve('granted');
+  }
+
+  function start() {
+    if (!motionAvailable()) {
+      setStatus('non supporté', 'err');
+      el.hint.innerHTML = 'Ce navigateur ne fournit pas <code>DeviceMotionEvent</code>. Ouvre la page dans Chrome sur Android.';
+      return;
+    }
+    el.start.disabled = true;
+    requestPermission().then(function (state) {
+      el.start.disabled = false;
+      if (state !== 'granted') {
+        setStatus('refusé', 'err');
+        return;
+      }
+      listenTs = Date.now();
+      lastEventTs = 0;
+      rate.since = 0;
+      window.addEventListener('devicemotion', onMotion, { passive: true });
+      running = true;
+      el.start.textContent = 'Arrêter';
+      el.start.classList.add('stop');
+      setStatus('en attente…', '');
+      tickInterval = setInterval(tickRate, 1000);
+    }).catch(function () {
+      el.start.disabled = false;
+      setStatus('erreur', 'err');
+    });
+  }
+
+  var tickInterval = null;
+
+  function stop() {
+    window.removeEventListener('devicemotion', onMotion);
+    running = false;
+    el.start.textContent = 'Démarrer';
+    el.start.classList.remove('stop');
+    setStatus('en pause', '');
+    if (tickInterval) { clearInterval(tickInterval); tickInterval = null; }
+  }
+
+  function reset() {
+    samples = [];
+    prev = null;
+    total = 0;
+    t0 = 0;
+    lastRowTotal = 0;
+    el.log.querySelectorAll('.row').forEach(function (r) { r.remove(); });
+    el.vx.textContent = el.vy.textContent = el.vz.textContent = '—';
+    el.dx.textContent = el.dy.textContent = el.dz.textContent = 'Δ —';
+    el.vmag.textContent = el.vdelta.textContent = '—';
+    el.vcount.textContent = '0';
+    dirty = false;
+    drawChart();
+  }
+
+  el.start.addEventListener('click', function () {
+    if (running) stop(); else start();
+  });
+  el.reset.addEventListener('click', reset);
+
+  if (!motionAvailable()) {
+    setStatus('indisponible', 'err');
+  }
+  requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>
