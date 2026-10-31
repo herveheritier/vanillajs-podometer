@@ -62,7 +62,7 @@
   .badge.on { color: #04130a; background: var(--y); border-color: var(--y); }
   .badge.err { color: #2b0a0e; background: var(--x); border-color: var(--x); }
 
-  main { flex: 1; display: flex; flex-direction: column; gap: 10px; padding: 10px 14px; min-height: 0; }
+  main { flex: 1; display: flex; flex-direction: column; gap: 10px; padding: 10px 14px; min-height: 0; overflow-y: auto; }
 
   .axes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
   .axis {
@@ -106,7 +106,7 @@
 
   .tiltcard {
     display: grid;
-    grid-template-columns: 104px 1fr;
+    grid-template-columns: 132px 1fr;
     gap: 10px 14px;
     align-items: center;
     background: var(--panel);
@@ -114,12 +114,23 @@
     border-radius: 12px;
     padding: 8px 10px;
   }
-  #tilt { width: 104px; height: 130px; }
+  #tilt { width: 132px; height: 165px; cursor: pointer; touch-action: manipulation; }
   .tiltstats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; }
   .tiltstats .k { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .5px; }
   .tiltstats .v { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
-  .tiltnote { grid-column: 1 / -1; font-size: 10px; color: var(--dim); line-height: 1.45; }
-  .tiltnote b { color: var(--accent); font-weight: 600; }
+  .tiltfoot {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 10px;
+    color: var(--dim);
+  }
+  #viewname { color: var(--txt); font-weight: 600; font-size: 11px; }
+  #viewdots { display: flex; gap: 3px; }
+  #viewdots i { width: 5px; height: 5px; border-radius: 50%; background: #2b3a4b; display: block; }
+  #viewdots i.on { background: var(--accent); }
+  .taphint { margin-left: auto; opacity: .8; }
 
   canvas { width: 100%; height: 120px; display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
 
@@ -201,13 +212,17 @@
   </div>
 
   <div class="tiltcard">
-    <canvas id="tilt" width="312" height="390"></canvas>
+    <canvas id="tilt" width="396" height="495"></canvas>
     <div class="tiltstats">
       <div><div class="k">Roulis</div><div class="v" id="vroll">—</div></div>
       <div><div class="k">Tangage</div><div class="v" id="vpitch">—</div></div>
       <div><div class="k">Déport</div><div class="v" id="voffset">—</div></div>
       <div><div class="k">État</div><div class="v" id="vstate">—</div></div>
-      <div class="tiltnote">Croix = centre de masse · <b>point orange</b> = masse apparente (projection de la gravité)</div>
+    </div>
+    <div class="tiltfoot">
+      <span id="viewname">Silhouette</span>
+      <span id="viewdots"></span>
+      <span class="taphint">toucher pour changer</span>
     </div>
   </div>
 
@@ -246,7 +261,8 @@
     chart: document.getElementById('chart'),
     tilt: document.getElementById('tilt'),
     vroll: document.getElementById('vroll'), vpitch: document.getElementById('vpitch'),
-    voffset: document.getElementById('voffset'), vstate: document.getElementById('vstate')
+    voffset: document.getElementById('voffset'), vstate: document.getElementById('vstate'),
+    viewname: document.getElementById('viewname'), viewdots: document.getElementById('viewdots')
   };
   var ctx = el.chart.getContext('2d');
   var tctx = el.tilt.getContext('2d');
@@ -356,7 +372,17 @@
     }
   }
 
-  /* ---------- mini afficheur : position / centre de masse ---------- */
+  /* ---------- mini afficheur : représentations de l'inclinaison ---------- */
+
+  var VIEWS = [
+    { nom: 'Silhouette', draw: drawSilhouette },
+    { nom: 'Niveau à bulle', draw: drawNiveau },
+    { nom: 'Vecteur 3D', draw: drawVecteur },
+    { nom: 'Cadran', draw: drawCadran },
+    { nom: 'Cube', draw: drawCube }
+  ];
+  var viewIndex = 0;
+  var lastG = null;
 
   function tiltOf(s) {
     if (!s) return null;
@@ -365,10 +391,15 @@
       mag: mag,
       fx: s.x / mag,
       fy: s.y / mag,
+      zf: s.z / mag,
       roll: Math.atan2(s.x, Math.sqrt(s.y * s.y + s.z * s.z)),
       pitch: Math.atan2(s.y, Math.sqrt(s.x * s.x + s.z * s.z)),
       frac: Math.sqrt(s.x * s.x + s.y * s.y) / mag
     };
+  }
+
+  function withG(g) {
+    return g || { mag: 0, fx: 0, fy: 0, zf: 1, roll: 0, pitch: 0, frac: 0 };
   }
 
   function roundRect(c, x, y, w, h, r) {
@@ -383,43 +414,46 @@
   }
 
   function drawTilt(g) {
+    lastG = g;
     var w = el.tilt.width, h = el.tilt.height;
-    var cx = w / 2, cy = h / 2;
     tctx.clearRect(0, 0, w, h);
+    VIEWS[viewIndex].draw(g, w, h);
+  }
 
-    var rectW = 140, rectH = 250;
-    var fx = g ? g.fx : 0, fy = g ? g.fy : 0;
-    var roll = g ? g.roll : 0, pitch = g ? g.pitch : 0;
-
+  /* 1. Silhouette : appareil incliné + masse apparente */
+  function drawSilhouette(g, w, h) {
+    var a = withG(g);
+    var rw = w * 0.46, rh = h * 0.62;
     tctx.save();
-    tctx.translate(cx, cy);
-    tctx.rotate(-roll);
-    tctx.scale(1, Math.max(0.28, Math.cos(pitch)));
+    tctx.translate(w / 2, h / 2);
+    tctx.rotate(-a.roll);
+    tctx.scale(1, Math.max(0.28, Math.cos(a.pitch)));
 
-    // silhouette de l'appareil
-    roundRect(tctx, -rectW / 2, -rectH / 2, rectW, rectH, 18);
+    roundRect(tctx, -rw / 2, -rh / 2, rw, rh, rw * 0.12);
     tctx.fillStyle = '#1a2330';
     tctx.fill();
     tctx.strokeStyle = '#33455a';
     tctx.lineWidth = 2;
     tctx.stroke();
 
-    // repère du centre de masse
+    roundRect(tctx, -rw * 0.14, -rh / 2 + 6, rw * 0.28, 5, 3);
+    tctx.fillStyle = '#33455a';
+    tctx.fill();
+
     tctx.strokeStyle = 'rgba(125,139,154,.75)';
     tctx.lineWidth = 1;
     tctx.beginPath();
-    tctx.arc(0, 0, 24, 0, Math.PI * 2);
+    tctx.arc(0, 0, rw * 0.17, 0, Math.PI * 2);
     tctx.stroke();
     tctx.beginPath();
-    tctx.moveTo(-36, 0); tctx.lineTo(-9, 0);
-    tctx.moveTo(9, 0); tctx.lineTo(36, 0);
-    tctx.moveTo(0, -36); tctx.lineTo(0, -9);
-    tctx.moveTo(0, 9); tctx.lineTo(0, 36);
+    tctx.moveTo(-rw * 0.3, 0); tctx.lineTo(-rw * 0.07, 0);
+    tctx.moveTo(rw * 0.07, 0); tctx.lineTo(rw * 0.3, 0);
+    tctx.moveTo(0, -rw * 0.3); tctx.lineTo(0, -rw * 0.07);
+    tctx.moveTo(0, rw * 0.07); tctx.lineTo(0, rw * 0.3);
     tctx.stroke();
 
-    // masse apparente : projection de la gravité sur l'écran
-    var dx = fx * (rectW / 2 - 22);
-    var dy = fy * (rectH / 2 - 26);
+    var dx = a.fx * (rw / 2 - rw * 0.13);
+    var dy = a.fy * (rh / 2 - rh * 0.09);
     tctx.strokeStyle = 'rgba(255,176,32,.6)';
     tctx.lineWidth = 2;
     tctx.beginPath();
@@ -428,20 +462,259 @@
     tctx.stroke();
 
     tctx.beginPath();
-    tctx.arc(dx, dy, 9, 0, Math.PI * 2);
+    tctx.arc(dx, dy, rw * 0.065, 0, Math.PI * 2);
     tctx.fillStyle = '#ffb020';
     tctx.fill();
     tctx.strokeStyle = '#0b0f14';
     tctx.lineWidth = 2;
     tctx.stroke();
 
-    // centre de masse
     tctx.beginPath();
-    tctx.arc(0, 0, 4, 0, Math.PI * 2);
+    tctx.arc(0, 0, 3.5, 0, Math.PI * 2);
+    tctx.fillStyle = '#e6edf3';
+    tctx.fill();
+    tctx.restore();
+  }
+
+  /* 2. Niveau à bulle : bulle dans un cercle de tolérance */
+  function drawNiveau(g, w, h) {
+    var a = withG(g);
+    var cx = w / 2, cy = h / 2, r = Math.min(w, h) * 0.38;
+
+    tctx.strokeStyle = '#2c3a4b';
+    tctx.lineWidth = 2;
+    tctx.beginPath();
+    tctx.arc(cx, cy, r, 0, Math.PI * 2);
+    tctx.stroke();
+
+    tctx.lineWidth = 1;
+    tctx.strokeStyle = 'rgba(125,139,154,.6)';
+    for (var i = 0; i < 24; i++) {
+      var ang = (i / 24) * Math.PI * 2;
+      var l = (i % 6 === 0) ? r * 0.13 : r * 0.06;
+      tctx.beginPath();
+      tctx.moveTo(cx + Math.cos(ang) * r, cy + Math.sin(ang) * r);
+      tctx.lineTo(cx + Math.cos(ang) * (r - l), cy + Math.sin(ang) * (r - l));
+      tctx.stroke();
+    }
+
+    tctx.strokeStyle = 'rgba(125,139,154,.35)';
+    tctx.beginPath();
+    tctx.moveTo(cx - r, cy); tctx.lineTo(cx + r, cy);
+    tctx.moveTo(cx, cy - r); tctx.lineTo(cx, cy + r);
+    tctx.stroke();
+
+    tctx.setLineDash([5, 5]);
+    tctx.strokeStyle = 'rgba(125,139,154,.45)';
+    tctx.beginPath();
+    tctx.arc(cx, cy, r * 0.62, 0, Math.PI * 2);
+    tctx.stroke();
+    tctx.setLineDash([]);
+
+    tctx.strokeStyle = 'rgba(74,222,128,.6)';
+    tctx.beginPath();
+    tctx.arc(cx, cy, r * 0.26, 0, Math.PI * 2);
+    tctx.stroke();
+
+    var bx = a.fx * r * 0.92, by = a.fy * r * 0.92;
+    var d = Math.sqrt(bx * bx + by * by);
+    if (d > r * 0.86) { bx *= (r * 0.86) / d; by *= (r * 0.86) / d; }
+    var br = r * 0.17;
+
+    tctx.beginPath();
+    tctx.arc(cx + bx, cy + by, br, 0, Math.PI * 2);
+    tctx.fillStyle = '#ffb020';
+    tctx.fill();
+    tctx.strokeStyle = 'rgba(11,15,20,.75)';
+    tctx.lineWidth = 2;
+    tctx.stroke();
+
+    tctx.beginPath();
+    tctx.arc(cx + bx - br * 0.3, cy + by - br * 0.32, br * 0.32, 0, Math.PI * 2);
+    tctx.fillStyle = 'rgba(255,255,255,.75)';
+    tctx.fill();
+
+    tctx.beginPath();
+    tctx.arc(cx, cy, 3.5, 0, Math.PI * 2);
+    tctx.fillStyle = '#e6edf3';
+    tctx.fill();
+  }
+
+  /* 3. Vecteur 3D : repère isométrique X/Y/Z et vecteur gravité */
+  function drawVecteur(g, w, h) {
+    var a = withG(g);
+    var s = Math.min(w, h) * 0.27;
+    var ox = w / 2, oy = h / 2 + s * 0.3;
+
+    function pt(x, y, z) {
+      return [ox + (x - y) * 0.87 * s, oy + ((x + y) * 0.5 - z) * s];
+    }
+
+    var axes = [
+      { v: [1, 0, 0], c: 'rgba(255,92,122,.75)', n: 'X' },
+      { v: [0, 1, 0], c: 'rgba(74,222,128,.75)', n: 'Y' },
+      { v: [0, 0, 1], c: 'rgba(77,163,255,.75)', n: 'Z' }
+    ];
+    tctx.lineWidth = 1.5;
+    tctx.textAlign = 'center';
+    tctx.textBaseline = 'middle';
+    for (var i = 0; i < axes.length; i++) {
+      var p = pt(axes[i].v[0] * 1.1, axes[i].v[1] * 1.1, axes[i].v[2] * 1.1);
+      tctx.strokeStyle = axes[i].c;
+      tctx.beginPath();
+      tctx.moveTo(ox, oy);
+      tctx.lineTo(p[0], p[1]);
+      tctx.stroke();
+      tctx.fillStyle = axes[i].c;
+      tctx.font = Math.round(s * 0.3) + 'px ui-sans-serif, system-ui, sans-serif';
+      tctx.fillText(axes[i].n, p[0] + (p[0] - ox) * 0.13, p[1] + (p[1] - oy) * 0.13);
+    }
+
+    var q = pt(a.fx * 1.35, a.fy * 1.35, a.zf * 1.35);
+    tctx.strokeStyle = '#ffb020';
+    tctx.lineWidth = 3;
+    tctx.beginPath();
+    tctx.moveTo(ox, oy);
+    tctx.lineTo(q[0], q[1]);
+    tctx.stroke();
+
+    var ux = q[0] - ox, uy = q[1] - oy;
+    var ul = Math.max(Math.sqrt(ux * ux + uy * uy), 0.001);
+    ux /= ul; uy /= ul;
+    tctx.beginPath();
+    tctx.moveTo(q[0], q[1]);
+    tctx.lineTo(q[0] - ux * 16 - uy * 9, q[1] - uy * 16 + ux * 9);
+    tctx.lineTo(q[0] - ux * 16 + uy * 9, q[1] - uy * 16 - ux * 9);
+    tctx.closePath();
+    tctx.fillStyle = '#ffb020';
+    tctx.fill();
+
+    tctx.beginPath();
+    tctx.arc(ox, oy, 4, 0, Math.PI * 2);
+    tctx.fillStyle = '#e6edf3';
+    tctx.fill();
+  }
+
+  /* 4. Cadran : aiguille de gravité + angle par rapport à la normale */
+  function drawCadran(g, w, h) {
+    var a = withG(g);
+    var cx = w / 2, cy = h / 2, r = Math.min(w, h) * 0.4;
+
+    tctx.strokeStyle = '#2c3a4b';
+    tctx.lineWidth = 2;
+    tctx.beginPath();
+    tctx.arc(cx, cy, r, 0, Math.PI * 2);
+    tctx.stroke();
+
+    tctx.strokeStyle = 'rgba(125,139,154,.6)';
+    tctx.lineWidth = 1;
+    for (var i = 0; i < 12; i++) {
+      var ang = (i / 12) * Math.PI * 2 - Math.PI / 2;
+      var l = (i % 3 === 0) ? r * 0.14 : r * 0.07;
+      tctx.beginPath();
+      tctx.moveTo(cx + Math.cos(ang) * r, cy + Math.sin(ang) * r);
+      tctx.lineTo(cx + Math.cos(ang) * (r - l), cy + Math.sin(ang) * (r - l));
+      tctx.stroke();
+    }
+
+    var na = Math.atan2(a.fy, a.fx);
+    var len = r * 0.76;
+    tctx.strokeStyle = '#ffb020';
+    tctx.lineWidth = 3;
+    tctx.lineCap = 'round';
+    tctx.beginPath();
+    tctx.moveTo(cx - Math.cos(na) * r * 0.16, cy - Math.sin(na) * r * 0.16);
+    tctx.lineTo(cx + Math.cos(na) * len, cy + Math.sin(na) * len);
+    tctx.stroke();
+    tctx.lineCap = 'butt';
+
+    tctx.beginPath();
+    tctx.arc(cx + Math.cos(na) * len, cy + Math.sin(na) * len, r * 0.075, 0, Math.PI * 2);
+    tctx.fillStyle = '#ffb020';
+    tctx.fill();
+
+    tctx.beginPath();
+    tctx.arc(cx, cy, r * 0.06, 0, Math.PI * 2);
     tctx.fillStyle = '#e6edf3';
     tctx.fill();
 
-    tctx.restore();
+    var tilt = Math.acos(Math.max(-1, Math.min(1, a.zf))) * 180 / Math.PI;
+    tctx.textAlign = 'center';
+    tctx.textBaseline = 'middle';
+    tctx.fillStyle = '#e6edf3';
+    tctx.font = '600 ' + Math.round(r * 0.26) + 'px ui-sans-serif, system-ui, sans-serif';
+    tctx.fillText(Math.round(tilt) + '°', cx, cy + r * 0.5);
+    tctx.fillStyle = '#7d8b9a';
+    tctx.font = Math.round(r * 0.13) + 'px ui-sans-serif, system-ui, sans-serif';
+    tctx.fillText('écart à la normale', cx, cy + r * 0.78);
+  }
+
+  /* 5. Cube : volume en perspective qui suit l'orientation */
+  function drawCube(g, w, h) {
+    var a = withG(g);
+    var S = Math.min(w, h) * 0.3;
+    var cr = Math.cos(-a.roll), sr = Math.sin(-a.roll);
+    var cp = Math.cos(-a.pitch), sp = Math.sin(-a.pitch);
+
+    function rot(p) {
+      var x1 = cr * p[0] - sr * p[1];
+      var y1 = sr * p[0] + cr * p[1];
+      var y2 = cp * y1 - sp * p[2];
+      var z2 = sp * y1 + cp * p[2];
+      return [x1, y2, z2];
+    }
+    function proj(p) {
+      var q = rot(p);
+      return [w / 2 + q[0] * S, h / 2 + q[1] * S, q[2]];
+    }
+
+    var C = [
+      [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+      [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]
+    ];
+    var F = [
+      { idx: [4, 5, 6, 7], n: [0, 0, 1] },
+      { idx: [0, 3, 2, 1], n: [0, 0, -1] },
+      { idx: [0, 1, 5, 4], n: [0, -1, 0] },
+      { idx: [3, 7, 6, 2], n: [0, 1, 0] },
+      { idx: [0, 4, 7, 3], n: [-1, 0, 0] },
+      { idx: [1, 2, 6, 5], n: [1, 0, 0] }
+    ];
+
+    var list = F.map(function (f) {
+      var pts = f.idx.map(function (k) { return proj(C[k]); });
+      var depth = (pts[0][2] + pts[1][2] + pts[2][2] + pts[3][2]) / 4;
+      var nn = rot(f.n);
+      return {
+        pts: pts,
+        depth: depth,
+        shade: 0.34 + 0.66 * Math.max(0, nn[2] * 0.85 + nn[1] * -0.3 + nn[0] * 0.4)
+      };
+    });
+    list.sort(function (p, q) { return p.depth - q.depth; });
+
+    tctx.lineWidth = 1.5;
+    tctx.lineJoin = 'round';
+    for (var i = 0; i < list.length; i++) {
+      var f = list[i];
+      var v = Math.max(20, Math.min(122, Math.round(150 * f.shade)));
+      tctx.beginPath();
+      tctx.moveTo(f.pts[0][0], f.pts[0][1]);
+      for (var k = 1; k < 4; k++) tctx.lineTo(f.pts[k][0], f.pts[k][1]);
+      tctx.closePath();
+      tctx.fillStyle = 'rgb(' + Math.round(v * 0.7) + ',' + Math.round(v * 0.82) + ',' + v + ')';
+      tctx.fill();
+      tctx.strokeStyle = '#0b0f14';
+      tctx.stroke();
+    }
+
+    var o = proj([0, 0, 0]);
+    tctx.strokeStyle = 'rgba(255,176,32,.9)';
+    tctx.lineWidth = 2;
+    tctx.beginPath();
+    tctx.moveTo(o[0], o[1]);
+    tctx.lineTo(o[0], o[1] + S * 0.5);
+    tctx.stroke();
   }
 
   function fmtDeg(rad) {
@@ -460,6 +733,16 @@
     el.voffset.textContent = Math.round(g.frac * 100) + ' %';
     var pct = g.frac * 100;
     el.vstate.textContent = pct < 8 ? 'au centre' : (pct < 45 ? 'décalé' : 'fortement déporté');
+  }
+
+  function updateViewLabel() {
+    el.viewname.textContent = VIEWS[viewIndex].nom;
+    var dots = el.viewdots.querySelectorAll('i');
+    if (!dots.length) {
+      for (var i = 0; i < VIEWS.length; i++) el.viewdots.appendChild(document.createElement('i'));
+      dots = el.viewdots.querySelectorAll('i');
+    }
+    for (var j = 0; j < dots.length; j++) dots[j].className = (j === viewIndex) ? 'on' : '';
   }
 
   var lastRowTotal = 0;
@@ -610,8 +893,15 @@
   if (!motionAvailable()) {
     setStatus('indisponible', 'err');
   }
+  updateViewLabel();
   updateTiltStats(null);
   drawTilt(null);
+  el.tilt.addEventListener('pointerdown', function (e) {
+    if (e && e.preventDefault) e.preventDefault();
+    viewIndex = (viewIndex + 1) % VIEWS.length;
+    updateViewLabel();
+    drawTilt(lastG);
+  });
   requestAnimationFrame(render);
 })();
 </script>
