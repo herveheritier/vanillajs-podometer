@@ -395,7 +395,8 @@
     { nom: 'Niveau à bulle', draw: drawNiveau },
     { nom: 'Vecteur 3D', draw: drawVecteur },
     { nom: 'Cadran', draw: drawCadran },
-    { nom: 'Cube', draw: drawCube }
+    { nom: 'Cube', draw: drawCube },
+    { nom: 'Avion', draw: drawAvion }
   ];
   var viewIndex = 0;
   var lastG = null;
@@ -749,6 +750,86 @@
     tctx.beginPath();
     tctx.moveTo(o[0], o[1]);
     tctx.lineTo(o[0], o[1] + S * 0.5);
+    tctx.stroke();
+  }
+
+  /* 6. Avion : horizon artificiel, silhouette fixe au centre */
+  function drawAvion(g, w, h) {
+    var a = withG(g);
+    var cx = w / 2, cy = h / 2, r = Math.min(w, h) * 0.4;
+    var off = Math.max(-r, Math.min(r, a.pitch * r * 1.2));
+
+    // fenêtre circulaire
+    tctx.save();
+    tctx.beginPath();
+    tctx.arc(cx, cy, r, 0, Math.PI * 2);
+    tctx.clip();
+
+    tctx.save();
+    tctx.translate(cx, cy);
+    tctx.rotate(-a.roll);
+    tctx.translate(0, off);
+
+    var ext = r * 2.2;
+    tctx.fillStyle = '#1d4a72';   // ciel
+    tctx.fillRect(-ext, -ext, ext * 2, ext);
+    tctx.fillStyle = '#5b4632';   // sol
+    tctx.fillRect(-ext, 0, ext * 2, ext);
+
+    tctx.strokeStyle = 'rgba(230,237,243,.9)';
+    tctx.lineWidth = 2;
+    tctx.beginPath();
+    tctx.moveTo(-ext, 0);
+    tctx.lineTo(ext, 0);
+    tctx.stroke();
+
+    // repères de tangage
+    tctx.strokeStyle = 'rgba(230,237,243,.45)';
+    tctx.lineWidth = 1.5;
+    for (var i = -2; i <= 2; i++) {
+      if (!i) continue;
+      var yy = -i * r * 0.42;
+      var half = (Math.abs(i) === 1 ? r * 0.22 : r * 0.13);
+      tctx.beginPath();
+      tctx.moveTo(-half, yy);
+      tctx.lineTo(half, yy);
+      tctx.stroke();
+    }
+    tctx.restore();
+    tctx.restore();
+
+    // silhouette de l'avion (fixe)
+    tctx.strokeStyle = '#ffb020';
+    tctx.lineWidth = Math.max(3, r * 0.055);
+    tctx.lineCap = 'round';
+    tctx.beginPath();
+    tctx.moveTo(cx - r * 0.34, cy);
+    tctx.lineTo(cx + r * 0.34, cy);
+    tctx.moveTo(cx - r * 0.12, cy);
+    tctx.lineTo(cx, cy + r * 0.09);
+    tctx.lineTo(cx + r * 0.12, cy);
+    tctx.stroke();
+    tctx.lineCap = 'butt';
+
+    tctx.beginPath();
+    tctx.arc(cx, cy, Math.max(2, r * 0.035), 0, Math.PI * 2);
+    tctx.fillStyle = '#ffb020';
+    tctx.fill();
+
+    // repère de roulis au sommet
+    tctx.beginPath();
+    tctx.moveTo(cx, cy - r * 0.82);
+    tctx.lineTo(cx - r * 0.07, cy - r * 0.97);
+    tctx.lineTo(cx + r * 0.07, cy - r * 0.97);
+    tctx.closePath();
+    tctx.fillStyle = '#ffb020';
+    tctx.fill();
+
+    // contour
+    tctx.strokeStyle = '#2c3a4b';
+    tctx.lineWidth = 2;
+    tctx.beginPath();
+    tctx.arc(cx, cy, r, 0, Math.PI * 2);
     tctx.stroke();
   }
 
