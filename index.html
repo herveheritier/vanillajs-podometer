@@ -104,6 +104,23 @@
   .cell .k { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .5px; }
   .cell .v { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
+  .tiltcard {
+    display: grid;
+    grid-template-columns: 104px 1fr;
+    gap: 10px 14px;
+    align-items: center;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 8px 10px;
+  }
+  #tilt { width: 104px; height: 130px; }
+  .tiltstats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; }
+  .tiltstats .k { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .5px; }
+  .tiltstats .v { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tiltnote { grid-column: 1 / -1; font-size: 10px; color: var(--dim); line-height: 1.45; }
+  .tiltnote b { color: var(--accent); font-weight: 600; }
+
   canvas { width: 100%; height: 120px; display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
 
   .logwrap {
@@ -183,6 +200,17 @@
     <div class="cell"><div class="k">Échantillons</div><div class="v" id="vcount">0</div></div>
   </div>
 
+  <div class="tiltcard">
+    <canvas id="tilt" width="312" height="390"></canvas>
+    <div class="tiltstats">
+      <div><div class="k">Roulis</div><div class="v" id="vroll">—</div></div>
+      <div><div class="k">Tangage</div><div class="v" id="vpitch">—</div></div>
+      <div><div class="k">Déport</div><div class="v" id="voffset">—</div></div>
+      <div><div class="k">État</div><div class="v" id="vstate">—</div></div>
+      <div class="tiltnote">Croix = centre de masse · <b>point orange</b> = masse apparente (projection de la gravité)</div>
+    </div>
+  </div>
+
   <canvas id="chart" width="600" height="240"></canvas>
 
   <div class="logwrap">
@@ -215,9 +243,13 @@
     vmag: document.getElementById('vmag'), vdelta: document.getElementById('vdelta'), vcount: document.getElementById('vcount'),
     start: document.getElementById('start'), reset: document.getElementById('reset'),
     log: document.getElementById('log'), hint: document.getElementById('hint'),
-    chart: document.getElementById('chart')
+    chart: document.getElementById('chart'),
+    tilt: document.getElementById('tilt'),
+    vroll: document.getElementById('vroll'), vpitch: document.getElementById('vpitch'),
+    voffset: document.getElementById('voffset'), vstate: document.getElementById('vstate')
   };
   var ctx = el.chart.getContext('2d');
+  var tctx = el.tilt.getContext('2d');
 
   var running = false;
   var samples = [];          // {t, x, y, z, mag}
@@ -324,6 +356,112 @@
     }
   }
 
+  /* ---------- mini afficheur : position / centre de masse ---------- */
+
+  function tiltOf(s) {
+    if (!s) return null;
+    var mag = Math.max(s.mag, 0.001);
+    return {
+      mag: mag,
+      fx: s.x / mag,
+      fy: s.y / mag,
+      roll: Math.atan2(s.x, Math.sqrt(s.y * s.y + s.z * s.z)),
+      pitch: Math.atan2(s.y, Math.sqrt(s.x * s.x + s.z * s.z)),
+      frac: Math.sqrt(s.x * s.x + s.y * s.y) / mag
+    };
+  }
+
+  function roundRect(c, x, y, w, h, r) {
+    if (c.roundRect) { c.beginPath(); c.roundRect(x, y, w, h, r); return; }
+    c.beginPath();
+    c.moveTo(x + r, y);
+    c.arcTo(x + w, y, x + w, y + h, r);
+    c.arcTo(x + w, y + h, x, y + h, r);
+    c.arcTo(x, y + h, x, y, r);
+    c.arcTo(x, y, x + w, y, r);
+    c.closePath();
+  }
+
+  function drawTilt(g) {
+    var w = el.tilt.width, h = el.tilt.height;
+    var cx = w / 2, cy = h / 2;
+    tctx.clearRect(0, 0, w, h);
+
+    var rectW = 140, rectH = 250;
+    var fx = g ? g.fx : 0, fy = g ? g.fy : 0;
+    var roll = g ? g.roll : 0, pitch = g ? g.pitch : 0;
+
+    tctx.save();
+    tctx.translate(cx, cy);
+    tctx.rotate(-roll);
+    tctx.scale(1, Math.max(0.28, Math.cos(pitch)));
+
+    // silhouette de l'appareil
+    roundRect(tctx, -rectW / 2, -rectH / 2, rectW, rectH, 18);
+    tctx.fillStyle = '#1a2330';
+    tctx.fill();
+    tctx.strokeStyle = '#33455a';
+    tctx.lineWidth = 2;
+    tctx.stroke();
+
+    // repère du centre de masse
+    tctx.strokeStyle = 'rgba(125,139,154,.75)';
+    tctx.lineWidth = 1;
+    tctx.beginPath();
+    tctx.arc(0, 0, 24, 0, Math.PI * 2);
+    tctx.stroke();
+    tctx.beginPath();
+    tctx.moveTo(-36, 0); tctx.lineTo(-9, 0);
+    tctx.moveTo(9, 0); tctx.lineTo(36, 0);
+    tctx.moveTo(0, -36); tctx.lineTo(0, -9);
+    tctx.moveTo(0, 9); tctx.lineTo(0, 36);
+    tctx.stroke();
+
+    // masse apparente : projection de la gravité sur l'écran
+    var dx = fx * (rectW / 2 - 22);
+    var dy = fy * (rectH / 2 - 26);
+    tctx.strokeStyle = 'rgba(255,176,32,.6)';
+    tctx.lineWidth = 2;
+    tctx.beginPath();
+    tctx.moveTo(0, 0);
+    tctx.lineTo(dx, dy);
+    tctx.stroke();
+
+    tctx.beginPath();
+    tctx.arc(dx, dy, 9, 0, Math.PI * 2);
+    tctx.fillStyle = '#ffb020';
+    tctx.fill();
+    tctx.strokeStyle = '#0b0f14';
+    tctx.lineWidth = 2;
+    tctx.stroke();
+
+    // centre de masse
+    tctx.beginPath();
+    tctx.arc(0, 0, 4, 0, Math.PI * 2);
+    tctx.fillStyle = '#e6edf3';
+    tctx.fill();
+
+    tctx.restore();
+  }
+
+  function fmtDeg(rad) {
+    if (!isFinite(rad)) return '—';
+    var d = rad * 180 / Math.PI;
+    return (d >= 0 ? '+' : '') + d.toFixed(0) + '°';
+  }
+
+  function updateTiltStats(g) {
+    if (!g) {
+      el.vroll.textContent = el.vpitch.textContent = el.voffset.textContent = el.vstate.textContent = '—';
+      return;
+    }
+    el.vroll.textContent = fmtDeg(g.roll);
+    el.vpitch.textContent = fmtDeg(g.pitch);
+    el.voffset.textContent = Math.round(g.frac * 100) + ' %';
+    var pct = g.frac * 100;
+    el.vstate.textContent = pct < 8 ? 'au centre' : (pct < 45 ? 'décalé' : 'fortement déporté');
+  }
+
   var lastRowTotal = 0;
 
   function render() {
@@ -341,6 +479,9 @@
       el.vdelta.textContent = fmt(last.d);
       el.vcount.textContent = total.toLocaleString('fr-FR');
 
+      var g = tiltOf(last);
+      updateTiltStats(g);
+      drawTilt(g);
       drawChart();
     }
 
@@ -456,6 +597,8 @@
     el.vmag.textContent = el.vdelta.textContent = '—';
     el.vcount.textContent = '0';
     dirty = false;
+    updateTiltStats(null);
+    drawTilt(null);
     drawChart();
   }
 
@@ -467,6 +610,8 @@
   if (!motionAvailable()) {
     setStatus('indisponible', 'err');
   }
+  updateTiltStats(null);
+  drawTilt(null);
   requestAnimationFrame(render);
 })();
 </script>
