@@ -68,7 +68,7 @@
   .sensors .seg {
     flex: 1;
     padding: 7px 10px;
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
     border-radius: 10px;
     border: 1px solid var(--line);
@@ -253,6 +253,7 @@
   <div class="sensors">
     <button type="button" class="seg on" id="segAccel" aria-pressed="true">Accéléromètre</button>
     <button type="button" class="seg" id="segGyro" aria-pressed="false">Gyroscope</button>
+    <button type="button" class="seg" id="segBoth" aria-pressed="false">Combiné</button>
   </div>
 
   <div class="axes">
@@ -324,6 +325,7 @@
     k1: document.getElementById('k1'), k2: document.getElementById('k2'),
     k3: document.getElementById('k3'), k4: document.getElementById('k4'),
     segAccel: document.getElementById('segAccel'), segGyro: document.getElementById('segGyro'),
+    segBoth: document.getElementById('segBoth'),
     title: document.getElementById('title'), hsym: document.getElementById('hsym')
   };
   var ctx = el.chart.getContext('2d');
@@ -391,6 +393,24 @@
   function ingest(x, y, z, raw, isGyro, lin) {
     var mag = Math.sqrt(x * x + y * y + z * z);
     if (!t0) t0 = raw;
+
+    // gyroscope : apporte la dynamique de l'orientation
+    if (isGyro && sensor !== 'accel') {
+      if (lastPoseT) {
+        var tpv = (raw - lastPoseT) / 1000;
+        if (tpv > 0 && tpv < 0.5) {
+          pose.roll += (y * Math.PI / 180) * tpv;
+          pose.pitch += (x * Math.PI / 180) * tpv;
+          pose.yaw += (z * Math.PI / 180) * tpv;
+          clampPose();
+        }
+      }
+      lastPoseT = raw;
+    }
+
+    // en mode combiné, les vitesses angulaires ne s'affichent pas
+    if (isGyro && sensor !== 'gyro') return;
+
     var s = {
       t: raw - t0,
       x: x, y: y, z: z, mag: mag,
@@ -400,14 +420,16 @@
       dz: prev ? z - prev.z : 0
     };
 
-    if (isGyro && prev) {
-      var dt = (s.t - prev.t) / 1000;
-      if (dt > 0 && dt < 0.5) {
-        pose.pitch = clamp(pose.pitch + x * Math.PI / 180 * dt, -Math.PI / 2, Math.PI / 2);
-        pose.roll = clamp(pose.roll + y * Math.PI / 180 * dt, -Math.PI / 2, Math.PI / 2);
+    if (!isGyro) {
+      if (sensor === 'both') {
+        // l'accéléromètre recale l'inclinaison (filtre complémentaire)
+        updatePoseFromAccel(x, y, z);
+        var gd = gravityFromPose();
+        pushStep(s, x - gd.x, y - gd.y, true);
+      } else if (lin) {
+        pushStep(s, lin.x, lin.y, false);
       }
     }
-    if (!isGyro && lin) updatePosition(s, lin.x, lin.y);
 
     if (axisOn.z) {
       zoomTarget = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoomTarget + s.dz * ZOOM_GAIN * axisSign.z));
@@ -494,7 +516,8 @@
   var sensor = 'accel';                           // 'accel' | 'gyro'
   var gyroSensor = null;
   var lastOrient = null;
-  var pose = { roll: 0, pitch: 0 };               // orientation intégrée (gyro)
+  var pose = { roll: 0, pitch: 0, yaw: 0 };        // orientation fusionnée (rad)
+  var lastPoseT = 0;
 
   var pos = { x: 0, y: 0, vx: 0, vy: 0, path: 0 };
   var trail = [];
@@ -992,6 +1015,36 @@
     tctx.stroke();
   }
 
+  function gravityFromPose() {
+    return {
+      x: 9.81 * Math.sin(pose.roll),
+      y: 9.81 * Math.sin(pose.pitch),
+      z: 9.81 * Math.cos(pose.roll) * Math.cos(pose.pitch)
+    };
+  }
+
+  function clampPose() {
+    pose.roll = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pose.roll));
+    pose.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pose.pitch));
+    if (pose.yaw > Math.PI) pose.yaw -= Math.PI * 2;
+    if (pose.yaw < -Math.PI) pose.yaw += Math.PI * 2;
+  }
+
+  function updatePoseFromAccel(x, y, z) {
+    var r = Math.atan2(x, Math.sqrt(y * y + z * z));
+    var p = Math.atan2(y, Math.sqrt(x * x + z * z));
+    pose.roll += (r - pose.roll) * 0.06;
+    pose.pitch += (p - pose.pitch) * 0.06;
+  }
+
+  function resetTrack() {
+    pos = { x: 0, y: 0, vx: 0, vy: 0, path: 0 };
+    trail = [];
+    gEst = null;
+    pose = { roll: 0, pitch: 0, yaw: 0 };
+    lastPoseT = 0;
+  }
+
   function clamp(v, lo, hi) {
     return Math.max(lo, Math.min(hi, v));
   }
@@ -1011,13 +1064,23 @@
     return { x: x - gEst.x, y: y - gEst.y };
   }
 
-  function updatePosition(s, lx, ly) {
+  // ax, ay : accélération linéaire dans le plan de l'appareil.
+  // world = true : on la ramène dans un repère fixe grâce au lacet fusionné.
+  function pushStep(s, ax, ay, world) {
     if (!prev) return;
     var dt = (s.t - prev.t) / 1000;
     if (!(dt > 0) || dt > 0.35) return;
 
-    var ax = axisOn.x ? lx * axisSign.x : 0;
-    var ay = axisOn.y ? ly * axisSign.y : 0;
+    ax = axisOn.x ? ax * axisSign.x : 0;
+    ay = axisOn.y ? ay * axisSign.y : 0;
+
+    if (world) {
+      var c = Math.cos(pose.yaw), n = Math.sin(pose.yaw);
+      var wx = ax * c - ay * n;
+      var wy = ax * n + ay * c;
+      ax = wx;
+      ay = wy;
+    }
     var amp = Math.sqrt(ax * ax + ay * ay);
     var tau = amp < 0.15 ? 0.12 : 0.9;   // appareil posé : freinage fort
     var damp = Math.exp(-dt / tau);
@@ -1088,14 +1151,9 @@
 
   // en mode gyroscope, les représentations montrent l'orientation intégrée
   function viewSource() {
-    if (sensor !== 'gyro') return samples.length ? samples[samples.length - 1] : null;
-    var k = 9.81;
-    return {
-      x: k * Math.sin(pose.roll),
-      y: k * Math.sin(pose.pitch),
-      z: k * Math.cos(pose.roll) * Math.cos(pose.pitch),
-      mag: k
-    };
+    if (sensor === 'accel') return samples.length ? samples[samples.length - 1] : null;
+    var g = gravityFromPose();
+    return { x: g.x, y: g.y, z: g.z, mag: 9.81 };
   }
 
   function refreshView() {
@@ -1239,6 +1297,7 @@
       listenTs = Date.now();
       lastEventTs = 0;
       rate.since = 0;
+      resetTrack();   // l'origine de la position = instant du démarrage
       attachSource();
       running = true;
       el.start.textContent = 'Arrêter';
@@ -1275,8 +1334,12 @@
   }
 
   function attachSource() {
-    if (sensor === 'gyro') attachGyro();
-    else window.addEventListener('devicemotion', onMotion, { passive: true });
+    if (sensor === 'gyro') {
+      attachGyro();
+      return;
+    }
+    window.addEventListener('devicemotion', onMotion, { passive: true });
+    if (sensor === 'both') attachGyro();
   }
 
   function detachSource() {
@@ -1299,12 +1362,15 @@
     if (wasRunning) stop();
     sensor = mode;
 
-    el.segAccel.className = 'seg' + (mode === 'accel' ? ' on' : '');
-    el.segGyro.className = 'seg' + (mode === 'gyro' ? ' on' : '');
-    if (el.segAccel.setAttribute) el.segAccel.setAttribute('aria-pressed', mode === 'accel' ? 'true' : 'false');
-    if (el.segGyro.setAttribute) el.segGyro.setAttribute('aria-pressed', mode === 'gyro' ? 'true' : 'false');
-    el.title.textContent = mode === 'accel' ? 'Accéléromètre' : 'Gyroscope';
-    el.hsym.textContent = mode === 'accel' ? '|a|' : '|ω|';
+    var segs = [['accel', el.segAccel], ['gyro', el.segGyro], ['both', el.segBoth]];
+    for (var i = 0; i < segs.length; i++) {
+      var on = segs[i][0] === mode;
+      segs[i][1].className = 'seg' + (on ? ' on' : '');
+      if (segs[i][1].setAttribute) segs[i][1].setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+    el.title.textContent = mode === 'accel' ? 'Accéléromètre'
+      : (mode === 'gyro' ? 'Gyroscope' : 'Accéléromètre + gyroscope');
+    el.hsym.textContent = mode === 'gyro' ? '|ω|' : '|a|';
 
     if (mode === 'gyro' && VIEWS[viewIndex].pos) {
       viewIndex = 0;
@@ -1338,10 +1404,7 @@
     dirty = false;
     zoom = 1; zoomTarget = 1; zoomLabel = '';
     el.vzoom.textContent = '×1.00';
-    pos = { x: 0, y: 0, vx: 0, vy: 0, path: 0 };
-    trail = [];
-    gEst = null;
-    pose = { roll: 0, pitch: 0 };
+    resetTrack();
     lastOrient = null;
     updateTiltStats(null);
     drawTilt(null);
@@ -1358,6 +1421,7 @@
   }
   el.segAccel.addEventListener('click', function () { setSensor('accel'); });
   el.segGyro.addEventListener('click', function () { setSensor('gyro'); });
+  el.segBoth.addEventListener('click', function () { setSensor('both'); });
   bindAxis('axX', 'x', 'invX');
   bindAxis('axY', 'y', 'invY');
   bindAxis('axZ', 'z', 'invZ');
