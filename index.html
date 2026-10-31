@@ -91,6 +91,16 @@
   .axis .d { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
   #axX { color: var(--x); } #axY { color: var(--y); } #axZ { color: var(--z); }
   .axis .d, .axis .k { color: var(--dim); }
+  .axis {
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: manipulation;
+    transition: opacity .15s ease, background .15s ease;
+  }
+  .axis:active { background: #19222e; }
+  .axis.off { opacity: .45; }
+  .axis.off .k { text-decoration: line-through; }
 
   .summary {
     display: grid;
@@ -201,9 +211,9 @@
 
 <main>
   <div class="axes">
-    <div class="axis" id="axX"><div class="k">X</div><div class="v" id="vx">—</div><div class="d" id="dx">Δ —</div></div>
-    <div class="axis" id="axY"><div class="k">Y</div><div class="v" id="vy">—</div><div class="d" id="dy">Δ —</div></div>
-    <div class="axis" id="axZ"><div class="k">Z</div><div class="v" id="vz">—</div><div class="d" id="dz">Δ —</div></div>
+    <div class="axis" id="axX" role="button" tabindex="0" aria-pressed="true" aria-label="Effet de l'axe X sur la représentation"><div class="k">X</div><div class="v" id="vx">—</div><div class="d" id="dx">Δ —</div></div>
+    <div class="axis" id="axY" role="button" tabindex="0" aria-pressed="true" aria-label="Effet de l'axe Y sur la représentation"><div class="k">Y</div><div class="v" id="vy">—</div><div class="d" id="dy">Δ —</div></div>
+    <div class="axis" id="axZ" role="button" tabindex="0" aria-pressed="true" aria-label="Effet de l'axe Z sur la représentation"><div class="k">Z</div><div class="v" id="vz">—</div><div class="d" id="dz">Δ —</div></div>
   </div>
 
   <div class="summary">
@@ -313,7 +323,9 @@
       dy: prev ? y - prev.y : 0,
       dz: prev ? z - prev.z : 0
     };
-    zoomTarget = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoomTarget + s.dz * ZOOM_GAIN));
+    if (axisOn.z) {
+      zoomTarget = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoomTarget + s.dz * ZOOM_GAIN));
+    }
     prev = s;
     samples.push(s);
     if (samples.length > MAX_SAMPLES) samples.shift();
@@ -388,6 +400,8 @@
   var viewIndex = 0;
   var lastG = null;
 
+  var axisOn = { x: true, y: true, z: true };   // effet de chaque axe sur la représentation
+
   var ZOOM_GAIN = 0.12;   // sensibilité aux variations de Z
   var ZOOM_MIN = 0.55;
   var ZOOM_MAX = 1.9;
@@ -398,14 +412,19 @@
   function tiltOf(s) {
     if (!s) return null;
     var mag = Math.max(s.mag, 0.001);
+    // X pilote le roulis et le déport horizontal, Y le tangage et le déport
+    // vertical, Z le zoom et l'écart à la normale. Couper un axe n'altère pas
+    // les grandeurs des autres.
+    var x = axisOn.x ? s.x : 0;
+    var y = axisOn.y ? s.y : 0;
     return {
       mag: mag,
-      fx: s.x / mag,
-      fy: s.y / mag,
-      zf: s.z / mag,
-      roll: Math.atan2(s.x, Math.sqrt(s.y * s.y + s.z * s.z)),
-      pitch: Math.atan2(s.y, Math.sqrt(s.x * s.x + s.z * s.z)),
-      frac: Math.sqrt(s.x * s.x + s.y * s.y) / mag
+      fx: x / mag,
+      fy: y / mag,
+      zf: axisOn.z ? s.z / mag : 0,
+      roll: axisOn.x ? Math.atan2(s.x, Math.sqrt(s.y * s.y + s.z * s.z)) : 0,
+      pitch: axisOn.y ? Math.atan2(s.y, Math.sqrt(s.x * s.x + s.z * s.z)) : 0,
+      frac: Math.sqrt(x * x + y * y) / mag
     };
   }
 
@@ -761,6 +780,25 @@
     for (var j = 0; j < dots.length; j++) dots[j].className = (j === viewIndex) ? 'on' : '';
   }
 
+  function refreshView() {
+    var last = samples.length ? samples[samples.length - 1] : null;
+    var g = tiltOf(last);
+    updateTiltStats(g);
+    drawTilt(g);
+  }
+
+  function bindAxis(id, key) {
+    var node = document.getElementById(id);
+    if (!node) return;
+    node.addEventListener('pointerdown', function (e) {
+      if (e && e.preventDefault) e.preventDefault();
+      axisOn[key] = !axisOn[key];
+      if (node.classList && node.classList.toggle) node.classList.toggle('off', !axisOn[key]);
+      if (node.setAttribute) node.setAttribute('aria-pressed', axisOn[key] ? 'true' : 'false');
+      refreshView();
+    });
+  }
+
   var lastRowTotal = 0;
 
   function render() {
@@ -922,6 +960,9 @@
   if (!motionAvailable()) {
     setStatus('indisponible', 'err');
   }
+  bindAxis('axX', 'x');
+  bindAxis('axY', 'y');
+  bindAxis('axZ', 'z');
   updateViewLabel();
   updateTiltStats(null);
   drawTilt(null);
