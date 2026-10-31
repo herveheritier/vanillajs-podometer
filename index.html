@@ -1013,6 +1013,35 @@
     tctx.beginPath();
     tctx.arc(cx, cy, R, 0, Math.PI * 2);
     tctx.stroke();
+
+    // distance par rapport au point de départ
+    var dist = Math.sqrt(pos.x * pos.x + pos.y * pos.y);
+    var label = (dist * 100).toFixed(0) + ' cm';
+    var vx2 = qx - cx, vy2 = qy - cy;
+    var vl = Math.sqrt(vx2 * vx2 + vy2 * vy2);
+    var nx = vl > 0.5 ? -vy2 / vl : 0;
+    var ny = vl > 0.5 ? vx2 / vl : -1;
+    var mx = cx + vx2 * 0.55 + nx * 17;
+    var my = cy + vy2 * 0.55 + ny * 17;
+
+    var fs = Math.max(18, Math.round(Math.min(w, h) * 0.075));
+    tctx.font = '600 ' + fs + 'px ui-sans-serif, system-ui, sans-serif';
+    tctx.textAlign = 'center';
+    tctx.textBaseline = 'middle';
+
+    var pad = fs * 0.4;
+    var tw = label.length * fs * 0.6;
+    roundRect(tctx, mx - tw / 2 - pad, my - fs / 2 - pad * 0.5, tw + pad * 2, fs + pad, fs * 0.4);
+    tctx.fillStyle = 'rgba(11,15,20,.85)';
+    tctx.fill();
+
+    tctx.fillStyle = '#ffb020';
+    tctx.fillText(label, mx, my);
+
+    // repère du point de départ
+    tctx.font = Math.round(fs * 0.62) + 'px ui-sans-serif, system-ui, sans-serif';
+    tctx.fillStyle = '#7d8b9a';
+    tctx.fillText('départ', cx, cy + fs * 0.9);
   }
 
   function gravityFromPose() {
