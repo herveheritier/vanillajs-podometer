@@ -269,7 +269,7 @@
   <div class="hstat">
     <span class="badge" id="status">inactif</span>
     <!-- version : incrémenter à chaque évolution poussée sur le dépôt -->
-    <span class="ver" id="version">v3</span>
+    <span class="ver" id="version">v4</span>
   </div>
 </header>
 
@@ -515,6 +515,31 @@
     var stepX = (w - pad * 2) / (n - 1);
     var scale = (h - pad * 2) / 2 / maxAbs;
     var mid = h / 2;
+
+    // pics de la courbe de contrôle : un trait vertical à chaque maximum marqué
+    var ctrlMax = 0;
+    for (var c = 0; c < n; c++) ctrlMax = Math.max(ctrlMax, Math.abs(samples[c][extraKey]));
+    var peakLevel = ctrlMax * 0.7;
+    var PEAK_WINDOW = 6;                  // échantillons comparés de part et d'autre
+    var PEAK_SPACING = 8;                 // écart minimal entre deux traits
+    var lastPeak = -1e9;
+    ctx.strokeStyle = 'rgba(245,196,81,.5)';
+    ctx.lineWidth = 1;
+    for (var p = 1; p < n - 1; p++) {
+      var pv = Math.abs(samples[p][extraKey]);
+      if (pv < peakLevel || p - lastPeak < PEAK_SPACING) continue;
+      var isPeak = true;
+      for (var q = Math.max(0, p - PEAK_WINDOW); q <= Math.min(n - 1, p + PEAK_WINDOW); q++) {
+        if (Math.abs(samples[q][extraKey]) > pv) { isPeak = false; break; }
+      }
+      if (!isPeak) continue;
+      var peakX = pad + p * stepX;
+      ctx.beginPath();
+      ctx.moveTo(peakX, 0);
+      ctx.lineTo(peakX, h);
+      ctx.stroke();
+      lastPeak = p;
+    }
 
     var series = [
       { key: 'x', color: '#ff5c7a' },
