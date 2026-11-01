@@ -64,6 +64,13 @@
   }
   .badge.on { color: #04130a; background: var(--y); border-color: var(--y); }
   .badge.err { color: #2b0a0e; background: var(--x); border-color: var(--x); }
+  .hstat { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+  .ver {
+    font-size: 10px;
+    color: var(--dim);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: .4px;
+  }
 
   main { flex: 1; display: flex; flex-direction: column; gap: 10px; padding: 10px 14px; min-height: 0; overflow-y: auto; }
 
@@ -249,7 +256,11 @@
 <body>
 <header>
   <h1><span id="title">Accéléromètre</span><small>variations en direct</small></h1>
-  <span class="badge" id="status">inactif</span>
+  <div class="hstat">
+    <span class="badge" id="status">inactif</span>
+    <!-- version : incrémenter à chaque évolution poussée sur le dépôt -->
+    <span class="ver" id="version">v1</span>
+  </div>
 </header>
 
 <main>
