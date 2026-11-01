@@ -88,6 +88,16 @@
   }
   .sensors .seg.on { background: var(--accent); border-color: var(--accent); color: #1a1200; }
 
+  .curvepick { align-items: center; }
+  .curvepick .clab {
+    font-size: 10px;
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    white-space: nowrap;
+  }
+  .curvepick .seg { padding: 6px 8px; font-size: 10px; }
+
   .axes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
   .axis {
     background: var(--panel);
@@ -259,7 +269,7 @@
   <div class="hstat">
     <span class="badge" id="status">inactif</span>
     <!-- version : incrémenter à chaque évolution poussée sur le dépôt -->
-    <span class="ver" id="version">v2</span>
+    <span class="ver" id="version">v3</span>
   </div>
 </header>
 
@@ -299,6 +309,12 @@
   </div>
 
   <canvas id="chart" width="600" height="240"></canvas>
+
+  <div class="sensors curvepick">
+    <span class="clab">Courbe jaune</span>
+    <button type="button" class="seg on" id="curveAvg" aria-pressed="true">Moyenne</button>
+    <button type="button" class="seg" id="curveMax" aria-pressed="false">Amplitude</button>
+  </div>
 
   <div class="logwrap">
     <div class="loghead"><span>temps</span><span>X</span><span>Y</span><span>Z</span><span id="hsym">|a|</span></div>
@@ -340,7 +356,8 @@
     k3: document.getElementById('k3'), k4: document.getElementById('k4'),
     segAccel: document.getElementById('segAccel'), segGyro: document.getElementById('segGyro'),
     segBoth: document.getElementById('segBoth'),
-    title: document.getElementById('title'), hsym: document.getElementById('hsym')
+    title: document.getElementById('title'), hsym: document.getElementById('hsym'),
+    curveAvg: document.getElementById('curveAvg'), curveMax: document.getElementById('curveMax')
   };
   var ctx = el.chart.getContext('2d');
   var tctx = el.tilt.getContext('2d');
@@ -436,6 +453,7 @@
       t: raw - t0,
       x: x, y: y, z: z, mag: mag,
       avg: (x + y + z) / 3,
+      amp: Math.max(Math.abs(x), Math.abs(y), Math.abs(z)),
       d: prev ? mag - prev.mag : 0,
       dx: prev ? x - prev.x : 0,
       dy: prev ? y - prev.y : 0,
@@ -485,10 +503,11 @@
 
     if (samples.length < 2) return;
 
+    var extraKey = curveMode === 'amp' ? 'amp' : 'avg';
     var maxAbs = 1;
     for (var i = 0; i < samples.length; i++) {
       var s = samples[i];
-      maxAbs = Math.max(maxAbs, Math.abs(s.x), Math.abs(s.y), Math.abs(s.z), Math.abs(s.avg));
+      maxAbs = Math.max(maxAbs, Math.abs(s.x), Math.abs(s.y), Math.abs(s.z), Math.abs(s[extraKey]));
     }
     maxAbs = Math.ceil(maxAbs * 1.1);
 
@@ -501,7 +520,7 @@
       { key: 'x', color: '#ff5c7a' },
       { key: 'y', color: '#4ade80' },
       { key: 'z', color: '#4da3ff' },
-      { key: 'avg', color: '#f5c451' }
+      { key: extraKey, color: '#f5c451' }
     ];
     ctx.lineWidth = 2;
     ctx.lineJoin = 'round';
@@ -538,6 +557,7 @@
   // position estimée par double intégration de l'accélération linéaire
   var sensor = 'accel';                           // 'accel' | 'gyro'
   var gyroMode = 1;                               // 1 = vitesses angulaires, 2 = cumul par composante
+  var curveMode = 'avg';                          // courbe jaune : 'avg' = moyenne, 'amp' = plus grande amplitude
   var gyroSum = { x: 0, y: 0, z: 0 };             // totaux du mode cumul
   var gyroSensor = null;
   var lastOrient = null;
@@ -1456,6 +1476,17 @@
     if (wasRunning) start();
   }
 
+  // courbe jaune : moyenne des 3 composantes ou plus grande amplitude
+  function setCurveMode(mode) {
+    if (curveMode === mode) return;
+    curveMode = mode;
+    el.curveAvg.className = 'seg' + (mode === 'avg' ? ' on' : '');
+    el.curveMax.className = 'seg' + (mode === 'amp' ? ' on' : '');
+    el.curveAvg.setAttribute('aria-pressed', mode === 'avg' ? 'true' : 'false');
+    el.curveMax.setAttribute('aria-pressed', mode === 'amp' ? 'true' : 'false');
+    drawChart();
+  }
+
   function stop() {
     detachSource();
     running = false;
@@ -1501,6 +1532,8 @@
     else setSensor('gyro');
   });
   el.segBoth.addEventListener('click', function () { setSensor('both'); });
+  el.curveAvg.addEventListener('click', function () { setCurveMode('avg'); });
+  el.curveMax.addEventListener('click', function () { setCurveMode('amp'); });
   bindAxis('axX', 'x', 'invX');
   bindAxis('axY', 'y', 'invY');
   bindAxis('axZ', 'z', 'invZ');
