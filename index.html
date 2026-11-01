@@ -394,7 +394,6 @@
   }
 
   function ingest(x, y, z, raw, isGyro, lin) {
-    var mag = Math.sqrt(x * x + y * y + z * z);
     if (!t0) t0 = raw;
 
     // gyroscope : apporte la dynamique de l'orientation
@@ -413,6 +412,14 @@
 
     // en mode combiné, les vitesses angulaires ne s'affichent pas
     if (isGyro && sensor !== 'gyro') return;
+
+    // second mode du gyroscope : chaque composante se cumule à elle-même
+    if (isGyro && gyroMode === 2) {
+      gyroSum.x += x; gyroSum.y += y; gyroSum.z += z;
+      x = gyroSum.x; y = gyroSum.y; z = gyroSum.z;
+    }
+
+    var mag = Math.sqrt(x * x + y * y + z * z);
 
     var s = {
       t: raw - t0,
@@ -517,6 +524,8 @@
 
   // position estimée par double intégration de l'accélération linéaire
   var sensor = 'accel';                           // 'accel' | 'gyro'
+  var gyroMode = 1;                               // 1 = vitesses angulaires, 2 = cumul par composante
+  var gyroSum = { x: 0, y: 0, z: 0 };             // totaux du mode cumul
   var gyroSensor = null;
   var lastOrient = null;
   var pose = { roll: 0, pitch: 0, yaw: 0 };        // orientation fusionnée (rad)
@@ -1160,10 +1169,12 @@
     el.vroll.textContent = fmtDeg(g.roll);
     el.vpitch.textContent = fmtDeg(g.pitch);
     if (sensor === 'gyro') {
-      var spin = samples.length ? samples[samples.length - 1].mag : 0;
-      el.k3.textContent = 'Vitesse';
-      el.voffset.textContent = Math.round(spin) + ' °/s';
-      el.vstate.textContent = spin < 4 ? 'immobile' : 'en rotation';
+      var lastS = samples.length ? samples[samples.length - 1] : null;
+      var spin = lastS ? lastS.mag : 0;
+      el.k3.textContent = gyroMode === 2 ? 'Cumul' : 'Vitesse';
+      el.voffset.textContent = gyroMode === 2 ? fmt(spin) : Math.round(spin) + ' °/s';
+      var live = gyroMode === 2 && lastS ? Math.abs(lastS.d) : spin;
+      el.vstate.textContent = live < 4 ? 'immobile' : 'en rotation';
       return;
     }
     el.voffset.textContent = Math.round(g.frac * 100) + ' %';
@@ -1385,7 +1396,22 @@
   }
 
   function unitLabel() {
-    return sensor === 'gyro' ? ' °/s' : ' m/s²';
+    if (sensor !== 'gyro') return ' m/s²';
+    return gyroMode === 2 ? ' cumul' : ' °/s';
+  }
+
+  function syncLabels() {
+    var segs = [['accel', el.segAccel], ['gyro', el.segGyro], ['both', el.segBoth]];
+    for (var i = 0; i < segs.length; i++) {
+      var on = segs[i][0] === sensor;
+      segs[i][1].className = 'seg' + (on ? ' on' : '');
+      if (segs[i][1].setAttribute) segs[i][1].setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+    el.segGyro.textContent = (sensor === 'gyro' && gyroMode === 2) ? 'Gyroscope Σ' : 'Gyroscope';
+    el.title.textContent = sensor === 'accel' ? 'Accéléromètre'
+      : (sensor === 'both' ? 'Accéléromètre + gyroscope'
+        : (gyroMode === 2 ? 'Gyroscope — cumul' : 'Gyroscope'));
+    el.hsym.textContent = sensor === 'gyro' ? (gyroMode === 2 ? 'Σ' : '|ω|') : '|a|';
   }
 
   function setSensor(mode) {
@@ -1393,21 +1419,25 @@
     var wasRunning = running;
     if (wasRunning) stop();
     sensor = mode;
-
-    var segs = [['accel', el.segAccel], ['gyro', el.segGyro], ['both', el.segBoth]];
-    for (var i = 0; i < segs.length; i++) {
-      var on = segs[i][0] === mode;
-      segs[i][1].className = 'seg' + (on ? ' on' : '');
-      if (segs[i][1].setAttribute) segs[i][1].setAttribute('aria-pressed', on ? 'true' : 'false');
-    }
-    el.title.textContent = mode === 'accel' ? 'Accéléromètre'
-      : (mode === 'gyro' ? 'Gyroscope' : 'Accéléromètre + gyroscope');
-    el.hsym.textContent = mode === 'gyro' ? '|ω|' : '|a|';
+    syncLabels();
 
     if (mode === 'gyro' && VIEWS[viewIndex].pos) {
       viewIndex = 0;
       updateViewLabel();
     }
+    reset();
+    setStatus('inactif', '');
+    if (wasRunning) start();
+  }
+
+  // appui sur le bouton Gyroscope alors qu'il est déjà actif : change de mode
+  function setGyroMode(mode) {
+    if (gyroMode === mode) return;
+    var wasRunning = running;
+    if (wasRunning) stop();
+    gyroMode = mode;
+    gyroSum = { x: 0, y: 0, z: 0 };
+    syncLabels();
     reset();
     setStatus('inactif', '');
     if (wasRunning) start();
@@ -1425,6 +1455,7 @@
   function reset() {
     samples = [];
     prev = null;
+    gyroSum = { x: 0, y: 0, z: 0 };
     total = 0;
     t0 = 0;
     lastRowTotal = 0;
@@ -1452,11 +1483,15 @@
     setStatus('indisponible', 'err');
   }
   el.segAccel.addEventListener('click', function () { setSensor('accel'); });
-  el.segGyro.addEventListener('click', function () { setSensor('gyro'); });
+  el.segGyro.addEventListener('click', function () {
+    if (sensor === 'gyro') setGyroMode(gyroMode === 1 ? 2 : 1);
+    else setSensor('gyro');
+  });
   el.segBoth.addEventListener('click', function () { setSensor('both'); });
   bindAxis('axX', 'x', 'invX');
   bindAxis('axY', 'y', 'invY');
   bindAxis('axZ', 'z', 'invZ');
+  syncLabels();
   updateViewLabel();
   updateTiltStats(null);
   drawTilt(null);
