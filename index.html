@@ -259,7 +259,7 @@
   <div class="hstat">
     <span class="badge" id="status">inactif</span>
     <!-- version : incrémenter à chaque évolution poussée sur le dépôt -->
-    <span class="ver" id="version">v1</span>
+    <span class="ver" id="version">v2</span>
   </div>
 </header>
 
@@ -501,14 +501,13 @@
       { key: 'x', color: '#ff5c7a' },
       { key: 'y', color: '#4ade80' },
       { key: 'z', color: '#4da3ff' },
-      { key: 'avg', color: '#f5c451', dash: true }
+      { key: 'avg', color: '#f5c451' }
     ];
+    ctx.lineWidth = 2;
     ctx.lineJoin = 'round';
     for (var k = 0; k < series.length; k++) {
       var key = series[k].key;
       ctx.strokeStyle = series[k].color;
-      if (series[k].dash) { ctx.lineWidth = 3; ctx.setLineDash([7, 5]); }
-      else { ctx.lineWidth = 2; ctx.setLineDash([]); }
       ctx.beginPath();
       for (var j = 0; j < n; j++) {
         var px = pad + j * stepX;
@@ -517,7 +516,6 @@
       }
       ctx.stroke();
     }
-    ctx.setLineDash([]);
   }
 
   /* ---------- mini afficheur : représentations de l'inclinaison ---------- */
