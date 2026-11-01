@@ -171,7 +171,7 @@
   <div class="hstat">
     <span class="badge" id="status">inactif</span>
     <!-- version : incrémenter à chaque évolution poussée sur le dépôt -->
-    <span class="ver" id="version">v8</span>
+    <span class="ver" id="version">v9</span>
   </div>
 </header>
 
@@ -248,6 +248,13 @@
   var stepPeak = 0;                               // crête récente de la composante dynamique
   var stepPrevDyn = 0;                            // valeur précédente, pour exiger une montée
   var lastStepAt = 0;                             // horodatage du dernier pas retenu
+  var stepGyroLp = { x: 0, y: 0, z: 0 };          // passe-bas de chaque axe (°/s)
+  var stepGyroInit = false;                       // passe-bas amorcé
+  var stepGyroT = 0;                              // horodatage du dernier échantillon gyroscopique
+  var stepGyroPeak = 0;                           // crête récente de la rotation dynamique
+  var stepGyroPrev = 0;                           // valeur précédente, pour exiger une montée
+  var stepGyroAt = 0;                             // dernière montée côté gyroscope
+  var gyroSeenAt = 0;                             // dernière donnée gyroscopique reçue
   var gyroSum = { x: 0, y: 0, z: 0 };             // totaux du mode cumul
   var gyroSensor = null;
   var lastOrient = null;
@@ -280,26 +287,45 @@
   }
 
   /* ---------- détection de pas ----------
-     Chaque échantillon d'accéléromètre donne la norme m = √(x²+y²+z²), ≈ 9,81 au repos.
-     Le pas est l'oscillation de m autour de la gravité, entre 1 et 3 Hz :
+     Le pas est une oscillation de 1 à 3 Hz qui apparaît sur deux capteurs :
+     la norme d'accélération m = √(x²+y²+z²) (≈ 9,81 au repos) et la vitesse
+     angulaire |ω| = √(ωx²+ωy²+ωz²) (bassin/pendule du bras). Chaque source est
+     traitée de la même façon, à ses unités près :
 
        a   = 1 − e^(−Δt/τhp)                    coefficient dépendant du pas de temps
-       lp += (m − lp) · a                       passe-bas ≈ 0,5 Hz : gravité et posture
-       dyn = m − lp                             composante dynamique du pas (oscille autour de 0)
+       lp += (v − lp) · a                       passe-bas ≈ 0,5 Hz : gravité, posture, dérive
+       dyn = v − lp                             composante dynamique du pas (oscille autour de 0)
        P   = max(P · e^(−Δt/τpic), dyn)         crête récente, décroissance lente
        θ   = borne(GAIN · P, MIN, MAX)          seuil adaptatif à l'allure
 
-     Un pas est compté quand dyn passe au-dessus de θ en montant (dyn > θ et la valeur
-     précédente ≤ θ) et qu'au moins REFRACT ms se sont écoulées depuis le pas précédent.
-     La montée évite de compter deux fois la même oscillation, le réfractaire borne la
-     cadence à 3,3 pas/s.                                                  */
-  var STEP_TAU_HP = 0.3;    // s : constante du passe-bas (coupure ≈ 0,53 Hz)
-  var STEP_TAU_PEAK = 3.0;  // s : mémoire de la crête (auto-échelle sur l'allure)
-  var STEP_GAIN = 0.4;      // seuil = 40 % de la crête récente
-  var STEP_MIN = 0.6;       // m/s² : plancher, au-dessus du bruit à l'arrêt
-  var STEP_MAX = 3.0;       // m/s² : plafond, contre les secousses
-  var STEP_REFRACT = 300;   // ms : cadence maximale
+     Une « montée » est retenue quand dyn passe au-dessus de θ sans y être déjà
+     (dyn > θ et valeur précédente ≤ θ) : une seule par oscillation. L'accéléromètre
+     déclenche, le gyroscope confirme : une montée n'est comptée que si |ω| a connu
+     une de ses propres montées il y a moins de MATCH ms. Cela rejette les chocs subis
+     sans rotation (téléphone posé, transport secoué). Un gyroscope absent, muet ou
+     trop faible (crête sous GYRO_MIN) est ignoré et l'accéléromètre décide seul.
+     Enfin REFRACT ms séparent deux pas, soit 3,3 pas/s au maximum.              */
+  var STEP_TAU_HP = 0.3;         // s : constante du passe-bas (coupure ≈ 0,53 Hz)
+  var STEP_TAU_PEAK = 3.0;       // s : mémoire de la crête (auto-échelle sur l'allure)
+  var STEP_GAIN = 0.4;           // seuil = 40 % de la crête récente
+  var STEP_MIN = 0.6;            // m/s² : plancher, au-dessus du bruit à l'arrêt
+  var STEP_MAX = 3.0;            // m/s² : plafond, contre les secousses
+  var STEP_REFRACT = 300;        // ms : cadence maximale
+  var STEP_GYRO_MIN = 20;        // °/s : plancher de la composante gyroscopique
+  var STEP_GYRO_MAX = 150;       // °/s : plafond, contre les rotations volontaires
+  var STEP_MATCH = 300;          // ms : écart maximal entre rotation et accélération
+  var STEP_PRESENT = 500;        // ms : une source est considérée disponible
 
+  function countStep(raw) {
+    if (raw - lastStepAt < STEP_REFRACT) return false;
+    lastStepAt = raw;
+    steps++;
+    el.vsteps.textContent = steps.toLocaleString('fr-FR');
+    flash();
+    return true;
+  }
+
+  // montée de la composante dynamique de |a|
   function detectStep(mag, raw) {
     if (stepLp === null) { stepLp = mag; stepT = raw; return false; }
     var dtS = Math.min(0.1, Math.max(0.002, (raw - stepT) / 1000));
@@ -307,20 +333,42 @@
 
     stepLp += (mag - stepLp) * (1 - Math.exp(-dtS / STEP_TAU_HP));
     var dyn = mag - stepLp;
-
     stepPeak = Math.max(stepPeak * Math.exp(-dtS / STEP_TAU_PEAK), dyn);
     var threshold = Math.min(STEP_MAX, Math.max(STEP_MIN, STEP_GAIN * stepPeak));
 
-    if (dyn > threshold && stepPrevDyn <= threshold && raw - lastStepAt >= STEP_REFRACT) {
-      lastStepAt = raw;
-      steps++;
-      el.vsteps.textContent = steps.toLocaleString('fr-FR');
-      flash();
-      stepPrevDyn = dyn;
-      return true;
-    }
+    var crossed = dyn > threshold && stepPrevDyn <= threshold;
     stepPrevDyn = dyn;
-    return false;
+    if (!crossed) return false;
+
+    // gyroscope absent, muet ou trop faible : l'accéléromètre décide seul
+    if (raw - gyroSeenAt > STEP_PRESENT || stepGyroPeak < STEP_GYRO_MIN) return countStep(raw);
+    return raw - stepGyroAt <= STEP_MATCH ? countStep(raw) : false;
+  }
+
+  // rotation : le gyroscope confirme ou refuse la montée d'accélération
+  function detectStepGyro(wx, wy, wz, raw) {
+    if (!stepGyroInit) {
+      stepGyroLp.x = wx; stepGyroLp.y = wy; stepGyroLp.z = wz;
+      stepGyroInit = true; stepGyroT = raw;
+      return;
+    }
+    var dtS = Math.min(0.1, Math.max(0.002, (raw - stepGyroT) / 1000));
+    stepGyroT = raw;
+    gyroSeenAt = raw;
+
+    // passe-bas par axe, puis norme de ce qui reste : insensible à l'orientation
+    var a = 1 - Math.exp(-dtS / STEP_TAU_HP);
+    stepGyroLp.x += (wx - stepGyroLp.x) * a;
+    stepGyroLp.y += (wy - stepGyroLp.y) * a;
+    stepGyroLp.z += (wz - stepGyroLp.z) * a;
+
+    var dx = wx - stepGyroLp.x, dy = wy - stepGyroLp.y, dz = wz - stepGyroLp.z;
+    var dyn = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    stepGyroPeak = Math.max(stepGyroPeak * Math.exp(-dtS / STEP_TAU_PEAK), dyn);
+    var threshold = Math.min(STEP_GYRO_MAX, Math.max(STEP_GYRO_MIN, STEP_GAIN * stepGyroPeak));
+
+    if (dyn > threshold && stepGyroPrev <= threshold) stepGyroAt = raw;
+    stepGyroPrev = dyn;
   }
 
   /* ---------- capture ---------- */
@@ -359,6 +407,9 @@
 
   function ingest(x, y, z, raw, isGyro) {
     if (!t0) t0 = raw;
+
+    // le gyroscope alimente la détection de pas même quand ses courbes ne s'affichent pas
+    if (isGyro) detectStepGyro(x, y, z, raw);
 
     // en mode combiné, les vitesses angulaires ne s'affichent pas
     if (isGyro && sensor !== 'gyro') return;
@@ -643,6 +694,13 @@
     stepPeak = 0;
     stepPrevDyn = 0;
     lastStepAt = 0;
+    stepGyroLp = { x: 0, y: 0, z: 0 };
+    stepGyroInit = false;
+    stepGyroT = 0;
+    stepGyroPeak = 0;
+    stepGyroPrev = 0;
+    stepGyroAt = 0;
+    gyroSeenAt = 0;
     el.vsteps.textContent = '0';
     dirty = false;
     lastOrient = null;
