@@ -88,32 +88,6 @@
   }
   .sensors .seg.on { background: var(--accent); border-color: var(--accent); color: #1a1200; }
 
-  .curvepick { align-items: center; }
-  .clab {
-    font-size: 10px;
-    color: var(--dim);
-    text-transform: uppercase;
-    letter-spacing: .5px;
-    white-space: nowrap;
-  }
-  .curvepick .seg { padding: 6px 8px; font-size: 10px; }
-
-  .smoothrow { display: flex; align-items: center; gap: 8px; }
-  .smoothrow input[type="range"] {
-    flex: 1;
-    min-width: 0;
-    height: 20px;
-    margin: 0;
-    accent-color: var(--accent);
-  }
-  #smoothval {
-    font-size: 10px;
-    color: var(--accent);
-    font-variant-numeric: tabular-nums;
-    min-width: 34px;
-    text-align: right;
-  }
-
   .axes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
   .axis {
     background: var(--panel);
@@ -156,42 +130,6 @@
 
   canvas { width: 100%; height: 120px; display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
 
-  .logwrap {
-    flex: 1;
-    min-height: 90px;
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-  }
-  .loghead {
-    display: grid;
-    grid-template-columns: 1.15fr 1fr 1fr 1fr 1fr;
-    gap: 4px;
-    padding: 7px 10px;
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: .5px;
-    color: var(--dim);
-    border-bottom: 1px solid var(--line);
-  }
-  .log { flex: 1; overflow-y: auto; font-variant-numeric: tabular-nums; }
-  .row {
-    display: grid;
-    grid-template-columns: 1.15fr 1fr 1fr 1fr 1fr;
-    gap: 4px;
-    padding: 5px 10px;
-    font-size: 12px;
-    border-bottom: 1px solid rgba(31, 42, 55, .55);
-  }
-  .row:nth-child(2) { background: #17202b; }
-  .row span { text-align: right; }
-  .row span:first-child { text-align: left; color: var(--dim); }
-  .row .mx { color: var(--x); } .row .my { color: var(--y); } .row .mz { color: var(--z); }
-  .row .mm { color: var(--accent); }
-
   footer { display: flex; gap: 8px; padding: 0 14px calc(10px + env(safe-area-inset-bottom)); }
   button {
     flex: 1;
@@ -233,7 +171,7 @@
   <div class="hstat">
     <span class="badge" id="status">inactif</span>
     <!-- version : incrémenter à chaque évolution poussée sur le dépôt -->
-    <span class="ver" id="version">v7</span>
+    <span class="ver" id="version">v8</span>
   </div>
 </header>
 
@@ -259,26 +197,9 @@
 
   <canvas id="chart" width="600" height="240"></canvas>
 
-  <div class="sensors curvepick">
-    <span class="clab">Courbe jaune</span>
-    <button type="button" class="seg on" id="curveAvg" aria-pressed="true">Moyenne</button>
-    <button type="button" class="seg" id="curveMax" aria-pressed="false">Amplitude</button>
-  </div>
-
-  <div class="smoothrow">
-    <span class="clab">Lissage</span>
-    <input type="range" id="smooth" min="0" max="90" step="5" value="0" aria-label="Facteur de lissage des courbes">
-    <span id="smoothval">0 %</span>
-  </div>
-
-  <div class="logwrap">
-    <div class="loghead"><span>temps</span><span>X</span><span>Y</span><span>Z</span><span id="hsym">|a|</span></div>
-    <div class="log" id="log">
-      <div class="empty" id="hint">
-        Appuie sur <b>Démarrer</b> puis accepte la demande de capteur de mouvement.
-        Les données arrivent uniquement après interaction (obligatoire sur Android et iOS).
-      </div>
-    </div>
+  <div class="empty" id="hint">
+    Appuie sur <b>Démarrer</b> puis accepte la demande de capteur de mouvement.
+    Les données arrivent uniquement après interaction (obligatoire sur Android et iOS).
   </div>
 </main>
 
@@ -292,7 +213,6 @@
   'use strict';
 
   var MAX_SAMPLES = 240;      // points conservés pour le graphe
-  var MAX_ROWS = 150;         // lignes conservées dans le journal
 
   var el = {
     status: document.getElementById('status'),
@@ -301,18 +221,16 @@
     vmag: document.getElementById('vmag'), vdelta: document.getElementById('vdelta'), vcount: document.getElementById('vcount'),
     vsteps: document.getElementById('vsteps'), flash: document.getElementById('flash'),
     start: document.getElementById('start'), reset: document.getElementById('reset'),
-    log: document.getElementById('log'), hint: document.getElementById('hint'),
+    hint: document.getElementById('hint'),
     chart: document.getElementById('chart'),
     segAccel: document.getElementById('segAccel'), segGyro: document.getElementById('segGyro'),
     segBoth: document.getElementById('segBoth'),
-    title: document.getElementById('title'), hsym: document.getElementById('hsym'),
-    curveAvg: document.getElementById('curveAvg'), curveMax: document.getElementById('curveMax'),
-    smooth: document.getElementById('smooth'), smoothval: document.getElementById('smoothval')
+    title: document.getElementById('title')
   };
   var ctx = el.chart.getContext('2d');
 
   var running = false;
-  var samples = [];          // {t, x, y, z, mag, avg, amp}
+  var samples = [];          // {t, x, y, z, mag, step}
   var prev = null;           // échantillon précédent
   var total = 0;
   var t0 = 0;               // horodatage du premier échantillon (log relatif)
@@ -323,8 +241,6 @@
 
   var sensor = 'accel';                           // 'accel' | 'gyro' | 'both'
   var gyroMode = 1;                               // 1 = vitesses angulaires, 2 = cumul par composante
-  var curveMode = 'avg';                          // courbe jaune : 'avg' = moyenne, 'amp' = plus grande amplitude
-  var smoothing = 0;                              // 0 = courbes brutes, jusqu'à 0.9 = très lissées
 
   var steps = 0;                                  // pas détectés depuis le dernier reset
   var stepLp = null;                              // passe-bas de la norme (gravité + posture)
@@ -349,6 +265,11 @@
 
   function motionAvailable() {
     return 'DeviceMotionEvent' in window;
+  }
+
+  function showHint(html) {
+    el.hint.innerHTML = html;
+    el.hint.hidden = false;
   }
 
   var flashTimer = null;
@@ -380,7 +301,7 @@
   var STEP_REFRACT = 300;   // ms : cadence maximale
 
   function detectStep(mag, raw) {
-    if (stepLp === null) { stepLp = mag; stepT = raw; return; }
+    if (stepLp === null) { stepLp = mag; stepT = raw; return false; }
     var dtS = Math.min(0.1, Math.max(0.002, (raw - stepT) / 1000));
     stepT = raw;
 
@@ -395,8 +316,11 @@
       steps++;
       el.vsteps.textContent = steps.toLocaleString('fr-FR');
       flash();
+      stepPrevDyn = dyn;
+      return true;
     }
     stepPrevDyn = dyn;
+    return false;
   }
 
   /* ---------- capture ---------- */
@@ -446,13 +370,12 @@
     }
 
     var mag = Math.sqrt(x * x + y * y + z * z);
-    if (!isGyro) detectStep(mag, raw);
+    var isStep = !isGyro && detectStep(mag, raw);
 
     var s = {
       t: raw - t0,
       x: x, y: y, z: z, mag: mag,
-      avg: (x + y + z) / 3,
-      amp: Math.max(Math.abs(x), Math.abs(y), Math.abs(z)),
+      step: isStep,
       d: prev ? mag - prev.mag : 0,
       dx: prev ? x - prev.x : 0,
       dy: prev ? y - prev.y : 0,
@@ -489,26 +412,10 @@
     if (samples.length < 2) return;
 
     var n = samples.length;
-
-    // lissage instantané : moyenne mobile exponentielle sur chaque composante
-    var k = 1 - smoothing;
-    var xs = [], ys = [], zs = [], ctrl = [];
-    var sx = samples[0].x, sy = samples[0].y, sz = samples[0].z;
-    for (var i = 0; i < n; i++) {
-      if (i > 0) {
-        sx += (samples[i].x - sx) * k;
-        sy += (samples[i].y - sy) * k;
-        sz += (samples[i].z - sz) * k;
-      }
-      xs.push(sx); ys.push(sy); zs.push(sz);
-      ctrl.push(curveMode === 'amp'
-        ? Math.max(Math.abs(sx), Math.abs(sy), Math.abs(sz))
-        : (sx + sy + sz) / 3);
-    }
-
     var maxAbs = 1;
-    for (var m = 0; m < n; m++) {
-      maxAbs = Math.max(maxAbs, Math.abs(xs[m]), Math.abs(ys[m]), Math.abs(zs[m]), Math.abs(ctrl[m]));
+    for (var i = 0; i < n; i++) {
+      var s = samples[i];
+      maxAbs = Math.max(maxAbs, Math.abs(s.x), Math.abs(s.y), Math.abs(s.z));
     }
     maxAbs = Math.ceil(maxAbs * 1.1);
 
@@ -516,53 +423,37 @@
     var scale = (h - pad * 2) / 2 / maxAbs;
     var mid = h / 2;
 
-    // pics de la courbe de contrôle : un trait vertical à chaque maximum marqué
-    var ctrlMax = 0;
-    for (var c = 0; c < n; c++) ctrlMax = Math.max(ctrlMax, Math.abs(ctrl[c]));
-    var peakLevel = ctrlMax * 0.7;
-    var PEAK_WINDOW = 6;                  // échantillons comparés de part et d'autre
-    var PEAK_SPACING = 8;                 // écart minimal entre deux traits
-    var lastPeak = -1e9;
-    ctx.strokeStyle = 'rgba(245,196,81,.5)';
+    // trait vertical uniquement à l'instant d'un pas détecté
+    ctx.strokeStyle = 'rgba(245,196,81,.65)';
     ctx.lineWidth = 1;
-    for (var p = 1; p < n - 1; p++) {
-      var pv = Math.abs(ctrl[p]);
-      if (pv < peakLevel || p - lastPeak < PEAK_SPACING) continue;
-      var isPeak = true;
-      for (var q = Math.max(0, p - PEAK_WINDOW); q <= Math.min(n - 1, p + PEAK_WINDOW); q++) {
-        if (Math.abs(ctrl[q]) > pv) { isPeak = false; break; }
-      }
-      if (!isPeak) continue;
-      var peakX = pad + p * stepX;
+    for (var p = 0; p < n; p++) {
+      if (!samples[p].step) continue;
+      var markX = pad + p * stepX;
       ctx.beginPath();
-      ctx.moveTo(peakX, 0);
-      ctx.lineTo(peakX, h);
+      ctx.moveTo(markX, 0);
+      ctx.lineTo(markX, h);
       ctx.stroke();
-      lastPeak = p;
     }
 
     var series = [
-      { vals: xs, color: '#ff5c7a' },
-      { vals: ys, color: '#4ade80' },
-      { vals: zs, color: '#4da3ff' },
-      { vals: ctrl, color: '#f5c451' }
+      { key: 'x', color: '#ff5c7a' },
+      { key: 'y', color: '#4ade80' },
+      { key: 'z', color: '#4da3ff' }
     ];
     ctx.lineWidth = 2;
     ctx.lineJoin = 'round';
-    for (var t = 0; t < series.length; t++) {
-      var vals = series[t].vals;
-      ctx.strokeStyle = series[t].color;
+    for (var k = 0; k < series.length; k++) {
+      var key = series[k].key;
+      ctx.strokeStyle = series[k].color;
       ctx.beginPath();
       for (var j = 0; j < n; j++) {
         var px = pad + j * stepX;
-        var py = mid - vals[j] * scale;
+        var py = mid - samples[j][key] * scale;
         if (j === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
       }
       ctx.stroke();
     }
   }
-
-  var lastRowTotal = 0;
 
   function render() {
     if (dirty && samples.length) {
@@ -579,36 +470,8 @@
       el.vdelta.textContent = fmt(last.d);
       el.vcount.textContent = total.toLocaleString('fr-FR');
 
+      el.hint.hidden = true;
       drawChart();
-    }
-
-    // journal : n'ajoute que les échantillons pas encore affichés
-    if (total !== lastRowTotal) {
-      var fresh = [];
-      for (var i = samples.length - 1; i >= 0; i--) {
-        if (samples[i].n <= lastRowTotal) break;
-        fresh.push(samples[i]);
-      }
-      fresh.reverse(); // du plus ancien au plus récent
-      for (var f = 0; f < fresh.length; f++) {
-        var s = fresh[f];
-        var row = document.createElement('div');
-        row.className = 'row';
-        row.innerHTML =
-          '<span>' + (s.t / 1000).toFixed(2) + 's</span>' +
-          '<span class="mx">' + fmt(s.x) + '</span>' +
-          '<span class="my">' + fmt(s.y) + '</span>' +
-          '<span class="mz">' + fmt(s.z) + '</span>' +
-          '<span class="mm">' + s.mag.toFixed(2) + '</span>';
-        el.log.insertBefore(row, el.log.firstChild);
-      }
-      if (fresh.length) {
-        if (el.hint.parentNode) el.hint.parentNode.removeChild(el.hint);
-        var rows = el.log.querySelectorAll('.row');
-        for (var r = MAX_ROWS; r < rows.length; r++) rows[r].remove();
-        el.log.scrollTop = 0;
-      }
-      lastRowTotal = total;
     }
 
     requestAnimationFrame(render);
@@ -627,9 +490,9 @@
       setStatus('aucune donnée', '');
     } else if (now - listenTs > 2500 && lastEventTs === 0) {
       setStatus('capteur muet', 'err');
-      el.hint.innerHTML =
+      showHint(
         'Aucun événement reçu. Le capteur de mouvement du navigateur exige une page <b>HTTPS</b> ou <code>localhost</code>. ' +
-        'Si tu ouvres le fichier en <code>file://</code>, sers-le avec <code>npx serve</code> ou <code>python3 -m http.server</code>.';
+        'Si tu ouvres le fichier en <code>file://</code>, sers-le avec <code>npx serve</code> ou <code>python3 -m http.server</code>.');
     }
   }
 
@@ -646,7 +509,7 @@
   function start() {
     if (!motionAvailable()) {
       setStatus('non supporté', 'err');
-      el.hint.innerHTML = 'Ce navigateur ne fournit pas <code>DeviceMotionEvent</code>. Ouvre la page dans Chrome sur Android.';
+      showHint('Ce navigateur ne fournit pas <code>DeviceMotionEvent</code>. Ouvre la page dans Chrome sur Android.');
       return;
     }
     el.start.disabled = true;
@@ -729,7 +592,6 @@
     el.title.textContent = sensor === 'accel' ? 'Accéléromètre'
       : (sensor === 'both' ? 'Accéléromètre + gyroscope'
         : (gyroMode === 2 ? 'Gyroscope — cumul' : 'Gyroscope'));
-    el.hsym.textContent = sensor === 'gyro' ? (gyroMode === 2 ? 'Σ' : '|ω|') : '|a|';
   }
 
   function setSensor(mode) {
@@ -756,17 +618,6 @@
     if (wasRunning) start();
   }
 
-  // courbe jaune : moyenne des 3 composantes ou plus grande amplitude
-  function setCurveMode(mode) {
-    if (curveMode === mode) return;
-    curveMode = mode;
-    el.curveAvg.className = 'seg' + (mode === 'avg' ? ' on' : '');
-    el.curveMax.className = 'seg' + (mode === 'amp' ? ' on' : '');
-    el.curveAvg.setAttribute('aria-pressed', mode === 'avg' ? 'true' : 'false');
-    el.curveMax.setAttribute('aria-pressed', mode === 'amp' ? 'true' : 'false');
-    drawChart();
-  }
-
   function stop() {
     detachSource();
     running = false;
@@ -782,8 +633,6 @@
     gyroSum = { x: 0, y: 0, z: 0 };
     total = 0;
     t0 = 0;
-    lastRowTotal = 0;
-    el.log.querySelectorAll('.row').forEach(function (r) { r.remove(); });
     el.vx.textContent = el.vy.textContent = el.vz.textContent = '—';
     el.dx.textContent = el.dy.textContent = el.dz.textContent = 'Δ —';
     el.vmag.textContent = el.vdelta.textContent = '—';
@@ -814,15 +663,7 @@
     else setSensor('gyro');
   });
   el.segBoth.addEventListener('click', function () { setSensor('both'); });
-  el.curveAvg.addEventListener('click', function () { setCurveMode('avg'); });
-  el.curveMax.addEventListener('click', function () { setCurveMode('amp'); });
-  el.smooth.addEventListener('input', function () {
-    smoothing = Number(el.smooth.value) / 100;
-    el.smoothval.textContent = el.smooth.value + ' %';
-    drawChart();
-  });
   syncLabels();
-  el.smoothval.textContent = el.smooth.value + ' %';
   drawChart();
   requestAnimationFrame(render);
 
