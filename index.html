@@ -151,6 +151,10 @@
     text-align: right;
   }
 
+  .learnrow { display: flex; align-items: center; gap: 8px; }
+  #labelStep { flex: none; padding: 9px 12px; font-size: 12px; }
+  #learnInfo { flex: 1; font-size: 10px; color: var(--dim); line-height: 1.35; }
+
   canvas { width: 100%; height: 120px; display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
 
   footer { display: flex; gap: 8px; padding: 0 14px calc(10px + env(safe-area-inset-bottom)); }
@@ -194,7 +198,7 @@
   <div class="hstat">
     <span class="badge" id="status">inactif</span>
     <!-- version : incrémenter à chaque évolution poussée sur le dépôt -->
-    <span class="ver" id="version">v10</span>
+    <span class="ver" id="version">v11</span>
   </div>
 </header>
 
@@ -224,6 +228,11 @@
     <span id="stepSensVal">50</span>
   </div>
 
+  <div class="learnrow">
+    <button type="button" id="labelStep">J'ai fait un pas</button>
+    <span id="learnInfo">apprentissage : 0 pas étiqueté</span>
+  </div>
+
   <canvas id="chart" width="600" height="240"></canvas>
 
   <div class="empty" id="hint">
@@ -250,6 +259,7 @@
     vmag: document.getElementById('vmag'), vdelta: document.getElementById('vdelta'), vcount: document.getElementById('vcount'),
     vsteps: document.getElementById('vsteps'), flash: document.getElementById('flash'),
     stepSens: document.getElementById('stepSens'), stepSensVal: document.getElementById('stepSensVal'),
+    labelStep: document.getElementById('labelStep'), learnInfo: document.getElementById('learnInfo'),
     start: document.getElementById('start'), reset: document.getElementById('reset'),
     hint: document.getElementById('hint'),
     chart: document.getElementById('chart'),
@@ -274,6 +284,13 @@
 
   var steps = 0;                                  // pas détectés depuis le dernier reset
   var stepSens = 50;                              // sensibilité : 0 = stricte, 50 = référence, 100 = permissive
+
+  // apprentissage : traces récentes, étiquettes et meilleurs paramètres
+  var LEARN_KEY = 'accelerometre.pas.v1';
+  var traceAccel = [];                            // {t, v} norme d'accélération
+  var traceGyro = [];                             // {t, v} norme de vitesse angulaire
+  var labels = [];                                // horodatages des pas signalés à la main
+  var learned = null;                             // meilleurs paramètres trouvés
   var stepLp = null;                              // passe-bas de la norme (gravité + posture)
   var stepT = 0;                                  // horodatage du dernier échantillon traité
   var stepPeak = 0;                               // crête récente de la composante dynamique
@@ -354,6 +371,11 @@
     return STEP_SENS_STRICT + (STEP_SENS_OPEN - STEP_SENS_STRICT) * stepSens / 100;
   }
 
+  // paramètres réglables par apprentissage (valeurs par défaut au départ)
+  var stepGain = STEP_GAIN;          // part de la crête utilisée comme seuil
+  var stepMin = STEP_MIN;            // plancher de la composante accélérométrique
+  var stepGyroMin = STEP_GYRO_MIN;   // plancher de la composante gyroscopique
+
   function countStep(raw) {
     if (raw - lastStepAt < STEP_REFRACT) return false;
     lastStepAt = raw;
@@ -373,14 +395,14 @@
     var dyn = mag - stepLp;
     stepPeak = Math.max(stepPeak * Math.exp(-dtS / STEP_TAU_PEAK), dyn);
     var f = stepFactor();
-    var threshold = Math.min(STEP_MAX * f, Math.max(STEP_MIN * f, STEP_GAIN * stepPeak * f));
+    var threshold = Math.min(STEP_MAX * f, Math.max(stepMin * f, stepGain * stepPeak * f));
 
     var crossed = dyn > threshold && stepPrevDyn <= threshold;
     stepPrevDyn = dyn;
     if (!crossed) return false;
 
     // gyroscope absent, muet ou trop faible : l'accéléromètre décide seul
-    if (raw - gyroSeenAt > STEP_PRESENT || stepGyroPeak < STEP_GYRO_MIN) return countStep(raw);
+    if (raw - gyroSeenAt > STEP_PRESENT || stepGyroPeak < stepGyroMin) return countStep(raw);
     return raw - stepGyroAt <= STEP_MATCH ? countStep(raw) : false;
   }
 
@@ -405,10 +427,168 @@
     var dyn = Math.sqrt(dx * dx + dy * dy + dz * dz);
     stepGyroPeak = Math.max(stepGyroPeak * Math.exp(-dtS / STEP_TAU_PEAK), dyn);
     var f = stepFactor();
-    var threshold = Math.min(STEP_GYRO_MAX * f, Math.max(STEP_GYRO_MIN * f, STEP_GAIN * stepGyroPeak * f));
+    var threshold = Math.min(STEP_GYRO_MAX * f, Math.max(stepGyroMin * f, stepGain * stepGyroPeak * f));
 
     if (dyn > threshold && stepGyroPrev <= threshold) stepGyroAt = raw;
     stepGyroPrev = dyn;
+  }
+
+  /* ---------- apprentissage des paramètres ----------
+     « J'ai fait un pas » étiquette l'instant courant. Les traces récentes sont
+     rejouées avec chaque combinaison de paramètres (gain du seuil, plancher
+     accélération, plancher rotation) ; une détection est correcte si elle tombe à
+     moins de MATCH ms d'une étiquette. Le F1 = 2·justes / (2·justes + faux + oubliés)
+     départage les jeux, le meilleur est appliqué puis conservé dans localStorage. */
+
+  function nowMs() {
+    return (window.performance && performance.now) ? performance.now() : Date.now();
+  }
+
+  function recordAccel(v) {
+    traceAccel.push({ t: nowMs(), v: v });
+    if (traceAccel.length > 3000) traceAccel.shift();     // ≈ 50 s à 60 Hz
+  }
+
+  function recordGyro(x, y, z) {
+    traceGyro.push({ t: nowMs(), x: x, y: y, z: z });
+    if (traceGyro.length > 3000) traceGyro.shift();
+  }
+
+  // rejoue la rotation enregistrée (axe par axe, comme en direct)
+  function gyroAnalysis(p) {
+    var f = stepFactor(), crosses = [], T = 0, peak = 0, prev = 0, maxPeak = 0;
+    var lx = null, ly = 0, lz = 0;
+    var gmax = STEP_GYRO_MAX * f;
+    for (var i = 0; i < traceGyro.length; i++) {
+      var s = traceGyro[i];
+      if (lx === null) { lx = s.x; ly = s.y; lz = s.z; T = s.t; continue; }
+      var dtS = Math.min(0.1, Math.max(0.002, (s.t - T) / 1000));
+      T = s.t;
+      var ka = 1 - Math.exp(-dtS / STEP_TAU_HP);
+      lx += (s.x - lx) * ka;
+      ly += (s.y - ly) * ka;
+      lz += (s.z - lz) * ka;
+      var dx = s.x - lx, dy = s.y - ly, dz = s.z - lz;
+      var dyn = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      peak = Math.max(peak * Math.exp(-dtS / STEP_TAU_PEAK), dyn);
+      if (peak > maxPeak) maxPeak = peak;
+      var threshold = Math.min(gmax, Math.max(p.gyroMin * f, p.gain * peak * f));
+      if (dyn > threshold && prev <= threshold) crosses.push(s.t);
+      prev = dyn;
+    }
+    return { crosses: crosses, peak: maxPeak };
+  }
+
+  // rejoue l'accélération et rend les instants de pas détectés avec ces paramètres
+  function replayDetections(p) {
+    var f = stepFactor(), amax = STEP_MAX * f;
+    var rot = gyroAnalysis(p);
+    var dets = [], lp = null, T = 0, peak = 0, prev = 0, lastStep = -1e9;
+    var gi = 0, gyroLast = -1e9, ci = 0, gyroCross = -1e9;
+    for (var i = 0; i < traceAccel.length; i++) {
+      var s = traceAccel[i];
+      while (gi < traceGyro.length && traceGyro[gi].t <= s.t) { gyroLast = traceGyro[gi].t; gi++; }
+      while (ci < rot.crosses.length && rot.crosses[ci] <= s.t) { gyroCross = rot.crosses[ci]; ci++; }
+
+      if (lp === null) { lp = s.v; T = s.t; continue; }
+      var dtS = Math.min(0.1, Math.max(0.002, (s.t - T) / 1000));
+      T = s.t;
+      lp += (s.v - lp) * (1 - Math.exp(-dtS / STEP_TAU_HP));
+      var dyn = s.v - lp;
+      peak = Math.max(peak * Math.exp(-dtS / STEP_TAU_PEAK), dyn);
+      var threshold = Math.min(amax, Math.max(p.min * f, p.gain * peak * f));
+      var crossed = dyn > threshold && prev <= threshold;
+      prev = dyn;
+      if (!crossed) continue;
+
+      var accept;
+      if (s.t - gyroLast > STEP_PRESENT || rot.peak < p.gyroMin) accept = true;
+      else accept = s.t - gyroCross <= STEP_MATCH;
+      if (accept && s.t - lastStep >= STEP_REFRACT) { lastStep = s.t; dets.push(s.t); }
+    }
+    return dets;
+  }
+
+  function scoreDetections(dets, labs) {
+    var used = [], hit = 0, i, j;
+    for (i = 0; i < dets.length; i++) {
+      var best = -1, bestD = Infinity;
+      for (j = 0; j < labs.length; j++) {
+        if (used[j]) continue;
+        var d = Math.abs(dets[i] - labs[j]);
+        if (d <= STEP_MATCH && d < bestD) { bestD = d; best = j; }
+      }
+      if (best >= 0) { used[best] = true; hit++; }
+    }
+    var fp = dets.length - hit;
+    var miss = labs.length - hit;
+    var denom = 2 * hit + fp + miss;
+    return { f1: denom ? 2 * hit / denom : 0, hit: hit, fp: fp, miss: miss };
+  }
+
+  function applyParams(p) {
+    stepGain = p.gain;
+    stepMin = p.min;
+    stepGyroMin = p.gyroMin;
+  }
+
+  function saveLearn(p) {
+    try { localStorage.setItem(LEARN_KEY, JSON.stringify(p)); } catch (err) {}
+  }
+
+  function loadLearn() {
+    try {
+      var p = JSON.parse(localStorage.getItem(LEARN_KEY) || 'null');
+      if (p && typeof p.gain === 'number' && typeof p.min === 'number' && typeof p.gyroMin === 'number') {
+        learned = p;
+        applyParams(p);
+      }
+    } catch (err) {}
+  }
+
+  // exploration de la grille : garde le jeu qui explique le mieux les étiquettes
+  function learn() {
+    var from = traceAccel.length ? traceAccel[0].t : 0;
+    var labs = labels.filter(function (t) { return t >= from; });
+    if (labs.length < 3) return null;
+
+    var gains = [0.25, 0.3, 0.4, 0.5, 0.6, 0.75];
+    var mins = [0.35, 0.5, 0.6, 0.8, 1.0, 1.2];
+    var gmins = [20, 30, 45];
+    var best = null;
+    for (var a = 0; a < gains.length; a++) {
+      for (var b = 0; b < mins.length; b++) {
+        for (var c = 0; c < gmins.length; c++) {
+          var p = { gain: gains[a], min: mins[b], gyroMin: gmins[c] };
+          var sc = scoreDetections(replayDetections(p), labs);
+          if (!best || sc.f1 > best.f1) {
+            best = {
+              gain: p.gain, min: p.min, gyroMin: p.gyroMin,
+              f1: sc.f1, hit: sc.hit, fp: sc.fp, miss: sc.miss,
+              label: labs.length, ts: Date.now()
+            };
+          }
+        }
+      }
+    }
+    if (!best) return null;
+    learned = best;
+    applyParams(best);
+    saveLearn(best);
+    return best;
+  }
+
+  function learnInfoText() {
+    var txt = labels.length + ' pas étiqueté' + (labels.length > 1 ? 's' : '');
+    if (learned) {
+      txt += ' · appris : gain ' + learned.gain.toFixed(2) +
+        ', seuil ' + learned.min.toFixed(2) + ' m/s²' +
+        ', gyro ' + Math.round(learned.gyroMin) + ' °/s' +
+        ' · F1 ' + learned.f1.toFixed(2);
+    } else if (labels.length < 3) {
+      txt += ' · 3 minimum pour apprendre';
+    }
+    el.learnInfo.textContent = txt;
   }
 
   /* ---------- capture ---------- */
@@ -449,7 +629,10 @@
     if (!t0) t0 = raw;
 
     // le gyroscope alimente la détection de pas même quand ses courbes ne s'affichent pas
-    if (isGyro) detectStepGyro(x, y, z, raw);
+    if (isGyro) {
+      detectStepGyro(x, y, z, raw);
+      recordGyro(x, y, z);
+    }
 
     // en mode combiné, les vitesses angulaires ne s'affichent pas
     if (isGyro && sensor !== 'gyro') return;
@@ -461,6 +644,7 @@
     }
 
     var mag = Math.sqrt(x * x + y * y + z * z);
+    if (!isGyro) recordAccel(mag);
     var isStep = !isGyro && detectStep(mag, raw);
 
     var s = {
@@ -767,6 +951,13 @@
   });
   stepSens = Number(el.stepSens.value);
   el.stepSensVal.textContent = String(stepSens);
+  el.labelStep.addEventListener('click', function () {
+    labels.push(nowMs());
+    learn();
+    learnInfoText();
+  });
+  loadLearn();
+  learnInfoText();
   syncLabels();
   drawChart();
   requestAnimationFrame(render);
