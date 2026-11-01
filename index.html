@@ -144,7 +144,7 @@
 
   .summary {
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-columns: 1fr 1fr;
     gap: 8px;
     background: var(--panel);
     border: 1px solid var(--line);
@@ -212,15 +212,28 @@
 
   .empty { padding: 14px; font-size: 12px; color: var(--dim); line-height: 1.5; }
   code { color: var(--accent); }
+
+  /* flash bref à chaque pas détecté */
+  #flash {
+    position: fixed;
+    inset: 0;
+    z-index: 9;
+    pointer-events: none;
+    background: var(--accent);
+    opacity: 0;
+    transition: opacity .3s ease;
+  }
+  #flash.on { opacity: .18; transition: opacity .03s linear; }
 </style>
 </head>
 <body>
+<div id="flash" aria-hidden="true"></div>
 <header>
   <h1><span id="title">Accéléromètre</span><small>variations en direct</small></h1>
   <div class="hstat">
     <span class="badge" id="status">inactif</span>
     <!-- version : incrémenter à chaque évolution poussée sur le dépôt -->
-    <span class="ver" id="version">v6</span>
+    <span class="ver" id="version">v7</span>
   </div>
 </header>
 
@@ -241,6 +254,7 @@
     <div class="cell"><div class="k">Norme</div><div class="v" id="vmag">—</div></div>
     <div class="cell"><div class="k">Δ variation</div><div class="v" id="vdelta">—</div></div>
     <div class="cell"><div class="k">Échantillons</div><div class="v" id="vcount">0</div></div>
+    <div class="cell"><div class="k">Pas</div><div class="v" id="vsteps">0</div></div>
   </div>
 
   <canvas id="chart" width="600" height="240"></canvas>
@@ -285,6 +299,7 @@
     vx: document.getElementById('vx'), vy: document.getElementById('vy'), vz: document.getElementById('vz'),
     dx: document.getElementById('dx'), dy: document.getElementById('dy'), dz: document.getElementById('dz'),
     vmag: document.getElementById('vmag'), vdelta: document.getElementById('vdelta'), vcount: document.getElementById('vcount'),
+    vsteps: document.getElementById('vsteps'), flash: document.getElementById('flash'),
     start: document.getElementById('start'), reset: document.getElementById('reset'),
     log: document.getElementById('log'), hint: document.getElementById('hint'),
     chart: document.getElementById('chart'),
@@ -310,6 +325,13 @@
   var gyroMode = 1;                               // 1 = vitesses angulaires, 2 = cumul par composante
   var curveMode = 'avg';                          // courbe jaune : 'avg' = moyenne, 'amp' = plus grande amplitude
   var smoothing = 0;                              // 0 = courbes brutes, jusqu'à 0.9 = très lissées
+
+  var steps = 0;                                  // pas détectés depuis le dernier reset
+  var stepLp = null;                              // passe-bas de la norme (gravité + posture)
+  var stepT = 0;                                  // horodatage du dernier échantillon traité
+  var stepPeak = 0;                               // crête récente de la composante dynamique
+  var stepPrevDyn = 0;                            // valeur précédente, pour exiger une montée
+  var lastStepAt = 0;                             // horodatage du dernier pas retenu
   var gyroSum = { x: 0, y: 0, z: 0 };             // totaux du mode cumul
   var gyroSensor = null;
   var lastOrient = null;
@@ -327,6 +349,54 @@
 
   function motionAvailable() {
     return 'DeviceMotionEvent' in window;
+  }
+
+  var flashTimer = null;
+  function flash() {
+    el.flash.classList.add('on');
+    if (flashTimer) clearTimeout(flashTimer);
+    flashTimer = setTimeout(function () { el.flash.classList.remove('on'); }, 70);
+  }
+
+  /* ---------- détection de pas ----------
+     Chaque échantillon d'accéléromètre donne la norme m = √(x²+y²+z²), ≈ 9,81 au repos.
+     Le pas est l'oscillation de m autour de la gravité, entre 1 et 3 Hz :
+
+       a   = 1 − e^(−Δt/τhp)                    coefficient dépendant du pas de temps
+       lp += (m − lp) · a                       passe-bas ≈ 0,5 Hz : gravité et posture
+       dyn = m − lp                             composante dynamique du pas (oscille autour de 0)
+       P   = max(P · e^(−Δt/τpic), dyn)         crête récente, décroissance lente
+       θ   = borne(GAIN · P, MIN, MAX)          seuil adaptatif à l'allure
+
+     Un pas est compté quand dyn passe au-dessus de θ en montant (dyn > θ et la valeur
+     précédente ≤ θ) et qu'au moins REFRACT ms se sont écoulées depuis le pas précédent.
+     La montée évite de compter deux fois la même oscillation, le réfractaire borne la
+     cadence à 3,3 pas/s.                                                  */
+  var STEP_TAU_HP = 0.3;    // s : constante du passe-bas (coupure ≈ 0,53 Hz)
+  var STEP_TAU_PEAK = 3.0;  // s : mémoire de la crête (auto-échelle sur l'allure)
+  var STEP_GAIN = 0.4;      // seuil = 40 % de la crête récente
+  var STEP_MIN = 0.6;       // m/s² : plancher, au-dessus du bruit à l'arrêt
+  var STEP_MAX = 3.0;       // m/s² : plafond, contre les secousses
+  var STEP_REFRACT = 300;   // ms : cadence maximale
+
+  function detectStep(mag, raw) {
+    if (stepLp === null) { stepLp = mag; stepT = raw; return; }
+    var dtS = Math.min(0.1, Math.max(0.002, (raw - stepT) / 1000));
+    stepT = raw;
+
+    stepLp += (mag - stepLp) * (1 - Math.exp(-dtS / STEP_TAU_HP));
+    var dyn = mag - stepLp;
+
+    stepPeak = Math.max(stepPeak * Math.exp(-dtS / STEP_TAU_PEAK), dyn);
+    var threshold = Math.min(STEP_MAX, Math.max(STEP_MIN, STEP_GAIN * stepPeak));
+
+    if (dyn > threshold && stepPrevDyn <= threshold && raw - lastStepAt >= STEP_REFRACT) {
+      lastStepAt = raw;
+      steps++;
+      el.vsteps.textContent = steps.toLocaleString('fr-FR');
+      flash();
+    }
+    stepPrevDyn = dyn;
   }
 
   /* ---------- capture ---------- */
@@ -376,6 +446,7 @@
     }
 
     var mag = Math.sqrt(x * x + y * y + z * z);
+    if (!isGyro) detectStep(mag, raw);
 
     var s = {
       t: raw - t0,
@@ -717,6 +788,13 @@
     el.dx.textContent = el.dy.textContent = el.dz.textContent = 'Δ —';
     el.vmag.textContent = el.vdelta.textContent = '—';
     el.vcount.textContent = '0';
+    steps = 0;
+    stepLp = null;
+    stepT = 0;
+    stepPeak = 0;
+    stepPrevDyn = 0;
+    lastStepAt = 0;
+    el.vsteps.textContent = '0';
     dirty = false;
     lastOrient = null;
     drawChart();
