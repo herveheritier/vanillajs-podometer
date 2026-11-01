@@ -424,6 +424,7 @@
     var s = {
       t: raw - t0,
       x: x, y: y, z: z, mag: mag,
+      avg: (x + y + z) / 3,
       d: prev ? mag - prev.mag : 0,
       dx: prev ? x - prev.x : 0,
       dy: prev ? y - prev.y : 0,
@@ -476,7 +477,7 @@
     var maxAbs = 1;
     for (var i = 0; i < samples.length; i++) {
       var s = samples[i];
-      maxAbs = Math.max(maxAbs, Math.abs(s.x), Math.abs(s.y), Math.abs(s.z));
+      maxAbs = Math.max(maxAbs, Math.abs(s.x), Math.abs(s.y), Math.abs(s.z), Math.abs(s.avg));
     }
     maxAbs = Math.ceil(maxAbs * 1.1);
 
@@ -488,13 +489,15 @@
     var series = [
       { key: 'x', color: '#ff5c7a' },
       { key: 'y', color: '#4ade80' },
-      { key: 'z', color: '#4da3ff' }
+      { key: 'z', color: '#4da3ff' },
+      { key: 'avg', color: '#f5c451', dash: true }
     ];
-    ctx.lineWidth = 2;
     ctx.lineJoin = 'round';
     for (var k = 0; k < series.length; k++) {
       var key = series[k].key;
       ctx.strokeStyle = series[k].color;
+      if (series[k].dash) { ctx.lineWidth = 3; ctx.setLineDash([7, 5]); }
+      else { ctx.lineWidth = 2; ctx.setLineDash([]); }
       ctx.beginPath();
       for (var j = 0; j < n; j++) {
         var px = pad + j * stepX;
@@ -503,6 +506,7 @@
       }
       ctx.stroke();
     }
+    ctx.setLineDash([]);
   }
 
   /* ---------- mini afficheur : représentations de l'inclinaison ---------- */
