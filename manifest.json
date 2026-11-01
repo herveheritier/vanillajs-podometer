@@ -1,7 +1,7 @@
 {
   "name": "Accéléromètre — variations",
   "short_name": "Accéléromètre",
-  "description": "Affiche chaque variation de l'accéléromètre, du gyroscope et la position estimée depuis le point de départ.",
+  "description": "Affiche chaque variation de l'accéléromètre et du gyroscope, avec les courbes des trois axes et leur moyenne.",
   "lang": "fr",
   "start_url": "./",
   "scope": "./",
