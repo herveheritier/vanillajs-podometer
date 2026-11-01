@@ -151,9 +151,16 @@
     text-align: right;
   }
 
-  .learnrow { display: flex; align-items: center; gap: 8px; }
-  #labelStep { flex: none; padding: 9px 12px; font-size: 12px; }
-  #learnInfo { flex: 1; font-size: 10px; color: var(--dim); line-height: 1.35; }
+  .learnpanel { display: flex; flex-direction: column; gap: 6px; }
+  .learnpanel[hidden] { display: none; }
+  #labelStep {
+    flex: none;
+    width: 100%;
+    height: 96px;
+    font-size: 20px;
+    border-radius: 16px;
+  }
+  #learnInfo { font-size: 10px; color: var(--dim); line-height: 1.35; }
 
   canvas { width: 100%; height: 120px; display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
 
@@ -198,11 +205,16 @@
   <div class="hstat">
     <span class="badge" id="status">inactif</span>
     <!-- version : incrémenter à chaque évolution poussée sur le dépôt -->
-    <span class="ver" id="version">v11</span>
+    <span class="ver" id="version">v12</span>
   </div>
 </header>
 
 <main>
+  <div class="sensors">
+    <button type="button" class="seg on" id="modeLearn" aria-pressed="true">Apprentissage</button>
+    <button type="button" class="seg" id="modeActive" aria-pressed="false">Actif</button>
+  </div>
+
   <div class="sensors">
     <button type="button" class="seg on" id="segAccel" aria-pressed="true">Accéléromètre</button>
     <button type="button" class="seg" id="segGyro" aria-pressed="false">Gyroscope</button>
@@ -228,9 +240,9 @@
     <span id="stepSensVal">50</span>
   </div>
 
-  <div class="learnrow">
+  <div class="learnpanel" id="learnPanel">
     <button type="button" id="labelStep">J'ai fait un pas</button>
-    <span id="learnInfo">apprentissage : 0 pas étiqueté</span>
+    <span id="learnInfo">0 pas étiqueté · aucun profil appris</span>
   </div>
 
   <canvas id="chart" width="600" height="240"></canvas>
@@ -260,6 +272,8 @@
     vsteps: document.getElementById('vsteps'), flash: document.getElementById('flash'),
     stepSens: document.getElementById('stepSens'), stepSensVal: document.getElementById('stepSensVal'),
     labelStep: document.getElementById('labelStep'), learnInfo: document.getElementById('learnInfo'),
+    learnPanel: document.getElementById('learnPanel'),
+    modeLearn: document.getElementById('modeLearn'), modeActive: document.getElementById('modeActive'),
     start: document.getElementById('start'), reset: document.getElementById('reset'),
     hint: document.getElementById('hint'),
     chart: document.getElementById('chart'),
@@ -287,6 +301,7 @@
 
   // apprentissage : traces récentes, étiquettes et meilleurs paramètres
   var LEARN_KEY = 'accelerometre.pas.v1';
+  var appMode = 'learn';                          // 'learn' : on enregistre · 'active' : on détecte
   var traceAccel = [];                            // {t, v} norme d'accélération
   var traceGyro = [];                             // {t, v} norme de vitesse angulaire
   var labels = [];                                // horodatages des pas signalés à la main
@@ -579,16 +594,37 @@
   }
 
   function learnInfoText() {
-    var txt = labels.length + ' pas étiqueté' + (labels.length > 1 ? 's' : '');
-    if (learned) {
-      txt += ' · appris : gain ' + learned.gain.toFixed(2) +
-        ', seuil ' + learned.min.toFixed(2) + ' m/s²' +
-        ', gyro ' + Math.round(learned.gyroMin) + ' °/s' +
-        ' · F1 ' + learned.f1.toFixed(2);
-    } else if (labels.length < 3) {
-      txt += ' · 3 minimum pour apprendre';
+    var profil = learned
+      ? 'profil : gain ' + learned.gain.toFixed(2) +
+        ' · seuil ' + learned.min.toFixed(2) + ' m/s²' +
+        ' · gyro ' + Math.round(learned.gyroMin) + ' °/s' +
+        ' · F1 ' + learned.f1.toFixed(2)
+      : 'aucun profil appris';
+    if (appMode === 'learn') {
+      var reste = labels.length < 3 ? ' · encore ' + (3 - labels.length) : '';
+      el.learnInfo.textContent = labels.length + ' pas étiqueté' + (labels.length > 1 ? 's' : '') + reste + ' · ' + profil;
+    } else {
+      el.learnInfo.textContent = 'actif · ' + profil;
     }
-    el.learnInfo.textContent = txt;
+  }
+
+  /* ---------- modes ---------- */
+
+  function applyMode() {
+    var learn = appMode === 'learn';
+    el.modeLearn.className = 'seg' + (learn ? ' on' : '');
+    el.modeActive.className = 'seg' + (learn ? '' : ' on');
+    el.modeLearn.setAttribute('aria-pressed', learn ? 'true' : 'false');
+    el.modeActive.setAttribute('aria-pressed', learn ? 'false' : 'true');
+    el.learnPanel.hidden = !learn;
+    learnInfoText();
+  }
+
+  function setMode(mode) {
+    if (appMode === mode) return;
+    appMode = mode;
+    if (mode === 'active') learn();   // le profil se fige sur les étiquettes en cours
+    applyMode();
   }
 
   /* ---------- capture ---------- */
@@ -957,7 +993,10 @@
     learnInfoText();
   });
   loadLearn();
-  learnInfoText();
+  appMode = learned ? 'active' : 'learn';
+  applyMode();
+  el.modeLearn.addEventListener('click', function () { setMode('learn'); });
+  el.modeActive.addEventListener('click', function () { setMode('active'); });
   syncLabels();
   drawChart();
   requestAnimationFrame(render);
