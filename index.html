@@ -128,6 +128,29 @@
   .cell .k { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .5px; }
   .cell .v { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
+  .tunerow { display: flex; align-items: center; gap: 8px; }
+  .clab {
+    font-size: 10px;
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    white-space: nowrap;
+  }
+  .tunerow input[type="range"] {
+    flex: 1;
+    min-width: 0;
+    height: 20px;
+    margin: 0;
+    accent-color: var(--accent);
+  }
+  #stepSensVal {
+    font-size: 10px;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+    min-width: 30px;
+    text-align: right;
+  }
+
   canvas { width: 100%; height: 120px; display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
 
   footer { display: flex; gap: 8px; padding: 0 14px calc(10px + env(safe-area-inset-bottom)); }
@@ -171,7 +194,7 @@
   <div class="hstat">
     <span class="badge" id="status">inactif</span>
     <!-- version : incrémenter à chaque évolution poussée sur le dépôt -->
-    <span class="ver" id="version">v9</span>
+    <span class="ver" id="version">v10</span>
   </div>
 </header>
 
@@ -193,6 +216,12 @@
     <div class="cell"><div class="k">Δ variation</div><div class="v" id="vdelta">—</div></div>
     <div class="cell"><div class="k">Échantillons</div><div class="v" id="vcount">0</div></div>
     <div class="cell"><div class="k">Pas</div><div class="v" id="vsteps">0</div></div>
+  </div>
+
+  <div class="tunerow">
+    <span class="clab">Sensibilité</span>
+    <input type="range" id="stepSens" min="0" max="100" step="5" value="50" aria-label="Sensibilité de la détection de pas">
+    <span id="stepSensVal">50</span>
   </div>
 
   <canvas id="chart" width="600" height="240"></canvas>
@@ -220,6 +249,7 @@
     dx: document.getElementById('dx'), dy: document.getElementById('dy'), dz: document.getElementById('dz'),
     vmag: document.getElementById('vmag'), vdelta: document.getElementById('vdelta'), vcount: document.getElementById('vcount'),
     vsteps: document.getElementById('vsteps'), flash: document.getElementById('flash'),
+    stepSens: document.getElementById('stepSens'), stepSensVal: document.getElementById('stepSensVal'),
     start: document.getElementById('start'), reset: document.getElementById('reset'),
     hint: document.getElementById('hint'),
     chart: document.getElementById('chart'),
@@ -243,6 +273,7 @@
   var gyroMode = 1;                               // 1 = vitesses angulaires, 2 = cumul par composante
 
   var steps = 0;                                  // pas détectés depuis le dernier reset
+  var stepSens = 50;                              // sensibilité : 0 = stricte, 50 = référence, 100 = permissive
   var stepLp = null;                              // passe-bas de la norme (gravité + posture)
   var stepT = 0;                                  // horodatage du dernier échantillon traité
   var stepPeak = 0;                               // crête récente de la composante dynamique
@@ -315,6 +346,13 @@
   var STEP_GYRO_MAX = 150;       // °/s : plafond, contre les rotations volontaires
   var STEP_MATCH = 300;          // ms : écart maximal entre rotation et accélération
   var STEP_PRESENT = 500;        // ms : une source est considérée disponible
+  var STEP_SENS_STRICT = 1.6;    // seuils ×1,6 quand la sensibilité est à 0
+  var STEP_SENS_OPEN = 0.4;      // seuils ×0,4 quand elle est à 100
+
+  // facteur appliqué aux seuils : < 1 = plus permissif, > 1 = plus strict
+  function stepFactor() {
+    return STEP_SENS_STRICT + (STEP_SENS_OPEN - STEP_SENS_STRICT) * stepSens / 100;
+  }
 
   function countStep(raw) {
     if (raw - lastStepAt < STEP_REFRACT) return false;
@@ -334,7 +372,8 @@
     stepLp += (mag - stepLp) * (1 - Math.exp(-dtS / STEP_TAU_HP));
     var dyn = mag - stepLp;
     stepPeak = Math.max(stepPeak * Math.exp(-dtS / STEP_TAU_PEAK), dyn);
-    var threshold = Math.min(STEP_MAX, Math.max(STEP_MIN, STEP_GAIN * stepPeak));
+    var f = stepFactor();
+    var threshold = Math.min(STEP_MAX * f, Math.max(STEP_MIN * f, STEP_GAIN * stepPeak * f));
 
     var crossed = dyn > threshold && stepPrevDyn <= threshold;
     stepPrevDyn = dyn;
@@ -365,7 +404,8 @@
     var dx = wx - stepGyroLp.x, dy = wy - stepGyroLp.y, dz = wz - stepGyroLp.z;
     var dyn = Math.sqrt(dx * dx + dy * dy + dz * dz);
     stepGyroPeak = Math.max(stepGyroPeak * Math.exp(-dtS / STEP_TAU_PEAK), dyn);
-    var threshold = Math.min(STEP_GYRO_MAX, Math.max(STEP_GYRO_MIN, STEP_GAIN * stepGyroPeak));
+    var f = stepFactor();
+    var threshold = Math.min(STEP_GYRO_MAX * f, Math.max(STEP_GYRO_MIN * f, STEP_GAIN * stepGyroPeak * f));
 
     if (dyn > threshold && stepGyroPrev <= threshold) stepGyroAt = raw;
     stepGyroPrev = dyn;
@@ -721,6 +761,12 @@
     else setSensor('gyro');
   });
   el.segBoth.addEventListener('click', function () { setSensor('both'); });
+  el.stepSens.addEventListener('input', function () {
+    stepSens = Number(el.stepSens.value);
+    el.stepSensVal.textContent = String(stepSens);
+  });
+  stepSens = Number(el.stepSens.value);
+  el.stepSensVal.textContent = String(stepSens);
   syncLabels();
   drawChart();
   requestAnimationFrame(render);
