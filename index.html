@@ -89,7 +89,7 @@
   .sensors .seg.on { background: var(--accent); border-color: var(--accent); color: #1a1200; }
 
   .curvepick { align-items: center; }
-  .curvepick .clab {
+  .clab {
     font-size: 10px;
     color: var(--dim);
     text-transform: uppercase;
@@ -97,6 +97,22 @@
     white-space: nowrap;
   }
   .curvepick .seg { padding: 6px 8px; font-size: 10px; }
+
+  .smoothrow { display: flex; align-items: center; gap: 8px; }
+  .smoothrow input[type="range"] {
+    flex: 1;
+    min-width: 0;
+    height: 20px;
+    margin: 0;
+    accent-color: var(--accent);
+  }
+  #smoothval {
+    font-size: 10px;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+    min-width: 34px;
+    text-align: right;
+  }
 
   .axes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
   .axis {
@@ -204,7 +220,7 @@
   <div class="hstat">
     <span class="badge" id="status">inactif</span>
     <!-- version : incrémenter à chaque évolution poussée sur le dépôt -->
-    <span class="ver" id="version">v5</span>
+    <span class="ver" id="version">v6</span>
   </div>
 </header>
 
@@ -233,6 +249,12 @@
     <span class="clab">Courbe jaune</span>
     <button type="button" class="seg on" id="curveAvg" aria-pressed="true">Moyenne</button>
     <button type="button" class="seg" id="curveMax" aria-pressed="false">Amplitude</button>
+  </div>
+
+  <div class="smoothrow">
+    <span class="clab">Lissage</span>
+    <input type="range" id="smooth" min="0" max="90" step="5" value="0" aria-label="Facteur de lissage des courbes">
+    <span id="smoothval">0 %</span>
   </div>
 
   <div class="logwrap">
@@ -269,7 +291,8 @@
     segAccel: document.getElementById('segAccel'), segGyro: document.getElementById('segGyro'),
     segBoth: document.getElementById('segBoth'),
     title: document.getElementById('title'), hsym: document.getElementById('hsym'),
-    curveAvg: document.getElementById('curveAvg'), curveMax: document.getElementById('curveMax')
+    curveAvg: document.getElementById('curveAvg'), curveMax: document.getElementById('curveMax'),
+    smooth: document.getElementById('smooth'), smoothval: document.getElementById('smoothval')
   };
   var ctx = el.chart.getContext('2d');
 
@@ -286,6 +309,7 @@
   var sensor = 'accel';                           // 'accel' | 'gyro' | 'both'
   var gyroMode = 1;                               // 1 = vitesses angulaires, 2 = cumul par composante
   var curveMode = 'avg';                          // courbe jaune : 'avg' = moyenne, 'amp' = plus grande amplitude
+  var smoothing = 0;                              // 0 = courbes brutes, jusqu'à 0.9 = très lissées
   var gyroSum = { x: 0, y: 0, z: 0 };             // totaux du mode cumul
   var gyroSensor = null;
   var lastOrient = null;
@@ -393,22 +417,37 @@
 
     if (samples.length < 2) return;
 
-    var extraKey = curveMode === 'amp' ? 'amp' : 'avg';
+    var n = samples.length;
+
+    // lissage instantané : moyenne mobile exponentielle sur chaque composante
+    var k = 1 - smoothing;
+    var xs = [], ys = [], zs = [], ctrl = [];
+    var sx = samples[0].x, sy = samples[0].y, sz = samples[0].z;
+    for (var i = 0; i < n; i++) {
+      if (i > 0) {
+        sx += (samples[i].x - sx) * k;
+        sy += (samples[i].y - sy) * k;
+        sz += (samples[i].z - sz) * k;
+      }
+      xs.push(sx); ys.push(sy); zs.push(sz);
+      ctrl.push(curveMode === 'amp'
+        ? Math.max(Math.abs(sx), Math.abs(sy), Math.abs(sz))
+        : (sx + sy + sz) / 3);
+    }
+
     var maxAbs = 1;
-    for (var i = 0; i < samples.length; i++) {
-      var s = samples[i];
-      maxAbs = Math.max(maxAbs, Math.abs(s.x), Math.abs(s.y), Math.abs(s.z), Math.abs(s[extraKey]));
+    for (var m = 0; m < n; m++) {
+      maxAbs = Math.max(maxAbs, Math.abs(xs[m]), Math.abs(ys[m]), Math.abs(zs[m]), Math.abs(ctrl[m]));
     }
     maxAbs = Math.ceil(maxAbs * 1.1);
 
-    var n = samples.length;
     var stepX = (w - pad * 2) / (n - 1);
     var scale = (h - pad * 2) / 2 / maxAbs;
     var mid = h / 2;
 
     // pics de la courbe de contrôle : un trait vertical à chaque maximum marqué
     var ctrlMax = 0;
-    for (var c = 0; c < n; c++) ctrlMax = Math.max(ctrlMax, Math.abs(samples[c][extraKey]));
+    for (var c = 0; c < n; c++) ctrlMax = Math.max(ctrlMax, Math.abs(ctrl[c]));
     var peakLevel = ctrlMax * 0.7;
     var PEAK_WINDOW = 6;                  // échantillons comparés de part et d'autre
     var PEAK_SPACING = 8;                 // écart minimal entre deux traits
@@ -416,11 +455,11 @@
     ctx.strokeStyle = 'rgba(245,196,81,.5)';
     ctx.lineWidth = 1;
     for (var p = 1; p < n - 1; p++) {
-      var pv = Math.abs(samples[p][extraKey]);
+      var pv = Math.abs(ctrl[p]);
       if (pv < peakLevel || p - lastPeak < PEAK_SPACING) continue;
       var isPeak = true;
       for (var q = Math.max(0, p - PEAK_WINDOW); q <= Math.min(n - 1, p + PEAK_WINDOW); q++) {
-        if (Math.abs(samples[q][extraKey]) > pv) { isPeak = false; break; }
+        if (Math.abs(ctrl[q]) > pv) { isPeak = false; break; }
       }
       if (!isPeak) continue;
       var peakX = pad + p * stepX;
@@ -432,20 +471,20 @@
     }
 
     var series = [
-      { key: 'x', color: '#ff5c7a' },
-      { key: 'y', color: '#4ade80' },
-      { key: 'z', color: '#4da3ff' },
-      { key: extraKey, color: '#f5c451' }
+      { vals: xs, color: '#ff5c7a' },
+      { vals: ys, color: '#4ade80' },
+      { vals: zs, color: '#4da3ff' },
+      { vals: ctrl, color: '#f5c451' }
     ];
     ctx.lineWidth = 2;
     ctx.lineJoin = 'round';
-    for (var k = 0; k < series.length; k++) {
-      var key = series[k].key;
-      ctx.strokeStyle = series[k].color;
+    for (var t = 0; t < series.length; t++) {
+      var vals = series[t].vals;
+      ctx.strokeStyle = series[t].color;
       ctx.beginPath();
       for (var j = 0; j < n; j++) {
         var px = pad + j * stepX;
-        var py = mid - samples[j][key] * scale;
+        var py = mid - vals[j] * scale;
         if (j === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
       }
       ctx.stroke();
@@ -699,7 +738,13 @@
   el.segBoth.addEventListener('click', function () { setSensor('both'); });
   el.curveAvg.addEventListener('click', function () { setCurveMode('avg'); });
   el.curveMax.addEventListener('click', function () { setCurveMode('amp'); });
+  el.smooth.addEventListener('input', function () {
+    smoothing = Number(el.smooth.value) / 100;
+    el.smoothval.textContent = el.smooth.value + ' %';
+    drawChart();
+  });
   syncLabels();
+  el.smoothval.textContent = el.smooth.value + ' %';
   drawChart();
   requestAnimationFrame(render);
 
